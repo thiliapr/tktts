@@ -1,0 +1,10 @@
+torch
+orjson
+tqdm
+transformers
+tokenizers
+librosa
+soundfile
+numpy
+matplotlib
+luaparser  # extract_artemis.py
