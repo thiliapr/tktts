@@ -4,13 +4,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import argparse
-import multiprocessing
 import pathlib
 import shutil
 from typing import Optional
 import orjson
 from tqdm import tqdm
-from utils.tookit import parallel_map
 
 
 def convert_and_save(
@@ -44,7 +42,7 @@ def convert_and_save(
         progress_bar.total = int(sum(dialogue_lengths) + (sum(dialogue_lengths) / len(dialogue_lengths) * (len(script_files) - script_file_idx - 1)))
 
         # 更新进度条描述
-        progress_bar.set_description(f"{script_file_idx}/{len(script_files)}")
+        progress_bar.set_description(f"{script_file_idx + 1}/{len(script_files)}")
 
         # 处理每个对话
         for dialogue in dialogues:
