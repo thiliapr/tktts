@@ -1,11 +1,12 @@
 {
     "芳乃": ["sex:female", "age:teenager", "voice_actor:遥そら", "character:朝武芳乃"],
     "小春の母親": ["sex:female", "age:adult"],
+    "小春の父親": ["sex:male", "age:adult"],
     "女子学生Ｄ": ["sex:female", "age:teenager"],
     "女子学生Ｆ": ["sex:female", "age:teenager"],
     "黒服Ａ": ["sex:male", "age:adult"],
     "高祖母": ["sex:female", "age:teenager"],
-    "黒服B": ["sex:male", "age:adult"],
+    "黒服Ｂ": ["sex:male", "age:adult"],
     "幸弘": ["sex:male", "age:adult"],
     "秋穂": ["sex:female", "age:teenager", "voice_actor:北見六花", "character:朝武秋穂"],
     "ママ": ["sex:female", "age:adult"],

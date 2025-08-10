@@ -14,7 +14,6 @@ from utils.tookit import parallel_map
 
 
 def convert_and_save(
-    rank: int,
     script_files: list[pathlib.Path],
     character_label_mapping: dict[str, list[str]],
     output_dir: pathlib.Path,
@@ -26,15 +25,29 @@ def convert_and_save(
     该函数处理每个对话，创建角色输出目录，复制音频文件，并生成相应的标签文件。
 
     Args:
-        rank: 当前工作进程的排名，用于控制进度条的显示。
         script_files: 包含脚本文件路径的列表。
         character_label_mapping: 角色标签映射表，包含角色ID与其标签的对应关系。
         output_dir: 输出目录，用于保存转换后的文件。
         extra_tags: 额外的标签列表，将与角色特定标签合并。
     """
-    for script_file in tqdm(script_files, disable=rank != 0):
+    # 初始化进度条
+    progress_bar = tqdm()
+    dialogue_lengths = []
+
+    for script_file_idx, script_file in enumerate(script_files):
+        # 读取脚本文件内容
+        dialogues = orjson.loads(script_file.read_bytes())
+
+        # 更新进度条总数，计算方式: 当前对话总数 + 预计剩余对话数
+        # 具体来说，预计剩余对话数 = (当前对话平均长度) * (剩余脚本文件数)
+        dialogue_lengths.append(len(dialogues))
+        progress_bar.total = int(sum(dialogue_lengths) + (sum(dialogue_lengths) / len(dialogue_lengths) * (len(script_files) - script_file_idx - 1)))
+
+        # 更新进度条描述
+        progress_bar.set_description(f"{script_file_idx}/{len(script_files)}")
+
         # 处理每个对话
-        for dialogue in orjson.loads(script_file.read_bytes()):
+        for dialogue in dialogues:
             # 解包，格式: (角色名, 文本内容, 音频文件路径, 是否循环语音)
             character_name, text_content, audio_file, is_loop_voice = dialogue
 
@@ -66,6 +79,9 @@ def convert_and_save(
                 "tags": tags
             }))
 
+            # 更新进度条
+            progress_bar.update()
+
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
@@ -82,7 +98,6 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("character_label_mapping", type=pathlib.Path, help="格式为 {角色ID: [标签1, 标签2, ...]}，需要手动创建此映射")
     parser.add_argument("output_dir", type=pathlib.Path, help="结构为 {输出目录}/{角色ID}/{音频文件} 和对应的 JSON 标签文件")
     parser.add_argument("-t", "--tag", type=str, action="append", default=[], help="给提取出来的数据集加全局标签，可以多次使用此选项。例如: 用`-t source:千恋＊万花`表示数据集来源")
-    parser.add_argument("-n", "--num-workers", type=int, default=multiprocessing.cpu_count(), help="执行任务的进程数，默认为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -97,10 +112,7 @@ def main(args: argparse.Namespace):
     character_label_mapping = orjson.loads(args.character_label_mapping.read_bytes())
 
     # 并行执行转换任务
-    parallel_map(convert_and_save, [
-        (worker_id, script_files[worker_id::args.num_workers], character_label_mapping, args.output_dir, args.tag)
-        for worker_id in range(args.num_workers)
-    ])
+    convert_and_save(script_files, character_label_mapping, args.output_dir, args.tag)
 
 
 if __name__ == "__main__":

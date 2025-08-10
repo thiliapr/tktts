@@ -46,6 +46,10 @@ def convert_and_save(
                     # 查找最佳匹配的语音文件
                     audio_file = find_highest_priority_file(voice_dir.glob(f"{voice_file}.*"), audio_suffixes)
 
+                    # 找不到文件就跳过
+                    if not audio_file:
+                        continue
+
                     # 添加到映射列表
                     character_names.add(voice["name"])
                     text_audio_mappings.append((voice["name"], text_content, str(audio_file), False))
@@ -60,6 +64,10 @@ def convert_and_save(
 
                     # 查找最佳匹配的语音文件
                     audio_file = find_highest_priority_file(voice_dir.glob(f"{voice_file}.*"), audio_suffixes)
+
+                    # 找不到文件就跳过
+                    if not audio_file:
+                        continue
 
                     # 添加到映射列表
                     character_names.add(voice["name"])
