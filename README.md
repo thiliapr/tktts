@@ -22,10 +22,10 @@ nvidia-smi  # 查看 CUDA 版本
 pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
 ```
 
-**提示**:
-根据`nvidia-smi`的输出`CUDA Version`把`cu128`换成你自己的 CUDA 版本，比如输出`CUDA Version: 12.1`就把`cu128`替换为`cu126`  
-具体来说，PyTorch 的CUDA是向下兼容的，所以选择时只需要选择比自己的 CUDA 版本小一点的版本就行了。  
-比如 PyTorch 提供了三个版本: `12.6, 12.8, 12.9`，然后你的 CUDA 版本是`12.7`，那么就选择`12.8`（因为官方提供的`12.6` < 你的`12.7` < 官方提供的`12.8`）
+> [!TIP]
+> 根据`nvidia-smi`的输出`CUDA Version`把`cu128`换成你自己的 CUDA 版本，比如输出`CUDA Version: 12.1`就把`cu128`替换为`cu126`  
+> 具体来说，PyTorch 的CUDA是向下兼容的，所以选择时只需要选择比自己的 CUDA 版本小一点的版本就行了。  
+> 比如 PyTorch 提供了三个版本: `12.6, 12.8, 12.9`，然后你的 CUDA 版本是`12.7`，那么就选择`12.8`（因为官方提供的`12.6` < 你的`12.7` < 官方提供的`12.8`）
 
 ### 准备数据集
 准备一个数据集，比如我用游戏提取脚本提取游戏语音作为数据集，这里演示使用 The LJ Speech Dataset 数据集
@@ -61,7 +61,8 @@ python init_checkpoint.py /path/to/ckpt
 python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/train_dataset -v /path/to/val_dataset
 ```
 将`<num_epochs>`替换为实际的你想训练的轮数  
-**提示**: 你可以在训练途中或训练后运行`python show_scales.py /path/to/ckpt`来看看每层的缩放因子，按数据流向排序
+> [!TIP]
+> 你可以在训练途中或训练后运行`python show_scales.py /path/to/ckpt`来看看每层的缩放因子，按数据流向排序
 
 ### 生成
 ```bash
