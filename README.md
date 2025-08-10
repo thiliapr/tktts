@@ -41,9 +41,9 @@ wget https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2  # https://keith
 
 #### 从 Artemis 游戏中提取数据集
 1. 使用[GARbro](https://github.com/crskycode/GARbro)从游戏目录的`xxx.pfs`文件提取出`sound/vo`和`script`文件夹，分别保存到`/path/to/game/sound/vo`和`/path/to/game/script`
-2. 运行`python extract_artemis.py /path/to/game/script /path/to/game/sound/vo /path/to/artemis_pre_dataest`，它会输出一个角色ID对应的角色名次数
+2. 运行`python extract_artemis.py /path/to/game/script /path/to/game/sound/vo /path/to/artemis_pre_dataset`，它会输出一个角色ID对应的角色名次数
 3. 仿照`python examples/select_oblige_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/artemis_c2t.json`
-4. 运行`python convert_artemis_to_dataset.py /path/to/artemis_pre_dataest /path/to/artemis_c2t.json /path/to/artemis_dataset -t source:<游戏名> -t <其他你想在所有对话加上的标签>`
+4. 运行`python convert_artemis_to_dataset.py /path/to/artemis_pre_dataset /path/to/artemis_c2t.json /path/to/artemis_dataset -t source:<游戏名> -t <其他你想在所有对话加上的标签>`
 5. 你的数据集应该已经在`/path/to/artemis_dataset`了
 
 ### 训练分词器
@@ -60,7 +60,7 @@ python init_checkpoint.py /path/to/ckpt
 ```bash
 python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/train_dataset -v /path/to/val_dataset
 ```
-将`<num_epochs>`替换为实际的你想训练的轮数
+将`<num_epochs>`替换为实际的你想训练的轮数  
 **提示**: 你可以在训练途中或训练后运行`python show_scales.py /path/to/ckpt`来看看每层的缩放因子，按数据流向排序
 
 ### 生成
@@ -84,7 +84,7 @@ Module EncoderLayer:
         .attn_norm, .ff_norm: ScaleNorm
     forward(x):
         norm_x = attn_norm(x)
-        x = x + .attn(x, x) * .attn_scale
+        x = x + .attn(norm_x, norm_x) * .attn_scale
         x = x + .ff(.ff_norm(x)) * .ff_scale
 Module DecoderLayer:
     init:
@@ -94,7 +94,7 @@ Module DecoderLayer:
         .sa_norm, .ca_norm, .ff_norm: ScaleNorm
     forward(target, memory):
         norm_target = sa_norm(target)
-        x = target + .sa(norm_target, x) * .sa_scale
+        x = target + .sa(norm_target, norm_target) * .sa_scale
         x = x + .ca(.ca_norm(x), memory) * .ca_scale
         x = x + .ff(.ff_norm(x)) * .ff_scale
 Module TkTTS:
