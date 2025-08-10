@@ -44,7 +44,7 @@ class ScaleNorm(nn.Module):
         self.eps = eps  # 避免除零错误的小常数
 
     def forward(self, x):
-        norm = torch.linalg.norm(x, dim=-1, keepdim=True).clamp(min=self.eps)  # 计算L2范数并防止为零
+        norm = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp(min=self.eps)  # 计算L2范数并防止为零
         return self.scale * x / norm  # 对输入张量进行缩放归一化
 
 
