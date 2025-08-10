@@ -599,6 +599,12 @@ class TkTTS(nn.Module):
         self.audio_predictor = nn.Linear(self.dim_model, dim_audio, device=device)
         self.stop_predictor = nn.Linear(self.dim_model, 1, device=device)
 
+        # 初始化权重
+        torch.nn.init.xavier_uniform_(self.embedding.weight)
+        for module in [self.audio_projection, self.audio_predictor, self.stop_predictor]:
+            torch.nn.init.xavier_uniform_(module.weight)
+            torch.nn.init.zeros_(module.bias)
+
     @overload
     def forward(
         self,
