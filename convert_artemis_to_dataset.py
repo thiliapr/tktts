@@ -10,7 +10,6 @@ import shutil
 from typing import Optional
 import orjson
 from tqdm import tqdm
-from utils.constants import RATE_TAG
 from utils.tookit import parallel_map
 
 
@@ -56,10 +55,6 @@ def convert_and_save(
 
             # 从映射表获取角色特定标签
             tags += character_label_mapping[dialogue["character_id"]]
-
-            # 添加成人内容标签（如果适用）
-            if dialogue["is_adult"]:
-                tags.append(f"{RATE_TAG}:18+")
 
             # 写入标签文件
             audio_metadata_file = (target_audio_path.parent / (target_audio_path.name + ".json"))

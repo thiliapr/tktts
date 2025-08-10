@@ -3,6 +3,8 @@
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+# 预处理
+AUDIO_SUFFIXES = [".flac", ".wav", ".ogg", ".mp3"]
 DEFAULT_FFT_LENGTH = 2048
 DEFAULT_SAMPLE_RATE = 24000.
 DEFAULT_HOP_LENGTH = int(0.0125 * DEFAULT_SAMPLE_RATE)
@@ -12,9 +14,6 @@ DEFAULT_NUM_HEADS = 8
 DEFAULT_DIM_HEAD = 64
 DEFAULT_DIM_FEEDFORWARD = DEFAULT_NUM_HEADS * DEFAULT_DIM_HEAD * 4
 DEFAULT_NUM_LAYERS = 6
-
-# 标签分类常量
-RATE_TAG = "rate"  # 年龄分级
 
 # 训练超参
 DEFAULT_LEARNING_RATE = 5e-5  # 学习率

@@ -8,16 +8,13 @@
 import argparse
 import multiprocessing
 import pathlib
-from typing import Any, Optional
+from typing import Optional
 from collections import Counter
 import orjson
 from tqdm import tqdm
 from luaparser import ast as lua_ast
-from utils.tookit import find_highest_priority_file, parallel_map
-
-QUOTE_CHARS = "“”「」『』'\""
-SPACE_CHARS = "\u3000"
-AUDIO_SUFFIXES = [".flac", ".wav", ".ogg", ".mp3"]
+from utils.tookit import clean_text, find_highest_priority_file, parallel_map
+from utils.constants import AUDIO_SUFFIXES
 
 
 def is_field_key_matching(field: lua_ast.Field, target_key: str) -> bool:
@@ -122,16 +119,7 @@ def extract_from_block(block: lua_ast.Field, lang_code: str) -> tuple[Optional[t
     voice = (character_id, character_name, voice_file) if voice_file else None
 
     # 合并文本内容并清理
-    content = "".join(text_segments).strip()
-
-    # 替换所有特殊空格为普通空格
-    for space_char in SPACE_CHARS:
-        content = content.replace(space_char, " ")
-
-    # 移除首尾引号
-    for quote_char in QUOTE_CHARS:
-        content = content.removeprefix(quote_char).removesuffix(quote_char)
-
+    content = clean_text("".join(text_segments))
     return voice, content
 
 
@@ -142,18 +130,17 @@ def convert_and_save(
     output_dir: pathlib.Path,
     audio_suffixes: list[str],
     lang_code: str
-) -> dict[str, Any]:
+) -> dict[str, Counter]:
     """
     将Lua脚本文件中的对话内容与对应的语音文件配对，生成JSON格式的映射文件。
 
     处理流程：
     1. 遍历所有Lua脚本文件
     2. 解析Lua AST结构并提取对话内容
-    3. 根据文件名判断是否为成人场景
-    4. 提取对话中的角色信息和文本内容
-    5. 查找匹配的语音文件（按扩展名优先级）
-    6. 生成角色ID到角色名的频率统计
-    7. 将文本-语音映射关系保存为JSON文件
+    3. 提取对话中的角色信息和文本内容
+    4. 查找匹配的语音文件（按扩展名优先级）
+    5. 生成角色ID到角色名的频率统计
+    6. 将文本-语音映射关系保存为JSON文件
 
     Args:
         process_rank: 当前处理进程的ID（用于控制进度条显示）
@@ -190,9 +177,6 @@ def convert_and_save(
         # 获取 AST 中的对话
         text_blocks = parsed_ast.body.body[2].values[0].fields
 
-        # 根据文件名判断是否成人场景
-        is_adult_scene = "h" in script_path.stem
-
         # 存储当前文件的文本-语音映射条目
         text_audio_mappings = []
 
@@ -209,10 +193,7 @@ def convert_and_save(
             character_id, character_name, voice_file = voice_info
 
             # 查找最佳匹配的语音文件
-            audio_file = find_highest_priority_file(
-                (voice_dir / character_id).glob(f"{voice_file}.*"),
-                audio_suffixes
-            )
+            audio_file = find_highest_priority_file((voice_dir / character_id).glob(f"{voice_file}.*"), audio_suffixes)
 
             # 添加文本-语音映射条目
             text_audio_mappings.append((character_id, dialogue_text, audio_file))
@@ -223,16 +204,14 @@ def convert_and_save(
             character_counter[character_id][character_name] += 1
 
         # 写入JSON文件
-        with open((output_dir / script_path.name).with_suffix(".json"), "wb") as f:
-            f.write(orjson.dumps([
-                {
-                    "path": str(file),
-                    "text_content": text_content,
-                    "character_id": character_id,
-                    "is_adult": is_adult_scene
-                }
-                for character_id, text_content, file in text_audio_mappings
-            ]))
+        (output_dir / script_path.name).with_suffix(".json").write_bytes(orjson.dumps([
+            {
+                "path": str(file),
+                "text_content": text_content,
+                "character_id": character_id,
+            }
+            for character_id, text_content, file in text_audio_mappings
+        ]))
 
     return character_counter
 

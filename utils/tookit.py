@@ -7,6 +7,8 @@ import pathlib
 from collections.abc import Callable, Iterable
 from typing import Optional, TypeVar
 
+QUOTE_CHARS = "“”「」『』'\""
+SPACE_CHARS = "\u3000"
 T = TypeVar("T")
 
 
@@ -47,6 +49,36 @@ def find_highest_priority_file(files: Iterable[pathlib.Path], suffix_priorities:
 
     # 返回优先级最高的文件
     return matching_files[0]
+
+
+def clean_text(text: str) -> str:
+    """
+    清理文本内容，移除特殊空格和引号。
+
+    Args:
+        text: 待清理的文本内容
+
+    Returns:
+        清理后的文本内容
+
+    Examples:
+        >>> clean_text("  “Hello, World!”  ")
+        'Hello, World!'
+        >>> clean_text("「こんにちは」")
+        'こんにちは'
+    """
+    # 替换所有特殊空格为普通空格
+    for space_char in SPACE_CHARS:
+        text = text.replace(space_char, " ")
+
+    # 清理文本内容
+    text = text.strip()
+
+    # 移除首尾引号
+    for quote_char in QUOTE_CHARS:
+        text = text.removeprefix(quote_char).removesuffix(quote_char)
+
+    return text
 
 
 def parallel_map(func: Callable[..., T], args: list[tuple]) -> list[T]:

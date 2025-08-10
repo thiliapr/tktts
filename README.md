@@ -42,9 +42,16 @@ wget https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2  # https://keith
 #### 从 Artemis 游戏中提取数据集
 1. 使用[GARbro](https://github.com/crskycode/GARbro)从游戏目录的`xxx.pfs`文件提取出`sound/vo`和`script`文件夹，分别保存到`/path/to/game/sound/vo`和`/path/to/game/script`
 2. 运行`python extract_artemis.py /path/to/game/script /path/to/game/sound/vo /path/to/artemis_pre_dataset`，它会输出一个角色ID对应的角色名次数
-3. 仿照`python examples/select_oblige_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/artemis_c2t.json`
+3. 仿照`examples/select_oblige_c2t.json`和`examples/aikotoba_sss_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/artemis_c2t.json`
 4. 运行`python convert_artemis_to_dataset.py /path/to/artemis_pre_dataset /path/to/artemis_c2t.json /path/to/artemis_dataset -t source:<游戏名> -t <其他你想在所有对话加上的标签>`
 5. 你的数据集应该已经在`/path/to/artemis_dataset`了
+
+#### 从 Kirikiri Z 游戏中提取数据集
+1. 使用[GARbro](https://github.com/crskycode/GARbro)分别从游戏目录的`data.xp3`文件和`voice.xp3`提取出`scn`和根目录文件夹，分别保存到`/path/to/game/script`和`/path/to/game/voice`
+2. 运行`python extract_kirikiriz.py /path/to/game/script /path/to/game/voice /path/to/kirikiriz_pre_dataset`，它会输出所有对话出现的角色名
+3. 仿照`examples/senren_banka_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/kirikiriz_c2t.json`
+4. 运行`python convert_kirikiriz_to_dataset.py /path/to/kirikiriz_pre_dataset /path/to/kirikiriz_c2t.json /path/to/kirikiriz_dataset -t source:<游戏名> -t <其他你想在所有对话加上的标签>`
+5. 你的数据集应该已经在`/path/to/kirikiriz_dataset`了
 
 ### 训练分词器
 ```bash
