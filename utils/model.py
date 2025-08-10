@@ -210,7 +210,7 @@ class MultiheadAttention(nn.Module):
         batch_size, seq_len, _ = queries.shape
 
         # 万恶的检查。为什么不能假设用户已经按照类型标注的去做呢？
-        assert keys_values is not None or kv_cache is not None, "至少提供 keys_values 或 kv_cache 中一个。"
+        assert keys_values is not None or kv_cache, "至少提供 keys_values 或 kv_cache 中一个。"
         assert not is_causal or queries is keys_values, "交叉注意力使用因果掩码，你真是个小天才。"
 
         # 计算查询、键值投影 [batch, seq_len, dim_model]
@@ -230,7 +230,7 @@ class MultiheadAttention(nn.Module):
             keys = self.apply_rope(keys, keys_rope_offset)
 
         # 应用 KV Cache
-        if kv_cache is not None:
+        if kv_cache:
             # 拼接缓存
             if keys_values is None:
                 keys, values = kv_cache
@@ -489,13 +489,13 @@ class TransformerDecoderLayer(nn.Module):
         kv_cache=None,
     ):
         # 获取位置偏移量
-        rope_offset = 0 if kv_cache is None else kv_cache[0][0].size(2)
+        rope_offset = kv_cache[0][0].size(2) if kv_cache else 0
 
         # 自注意力，应用缩放因子和残差连接
         normalized_target = self.self_attention_norm(target)
         attn_output, self_attn_kv_cache = self.self_attention(
             normalized_target, normalized_target,
-            kv_cache=None if kv_cache is None else kv_cache[0],
+            kv_cache=kv_cache[0] if kv_cache else None,
             padding_mask=target_padding_mask,
             queries_rope_offset=rope_offset,
             keys_rope_offset=rope_offset,
@@ -507,7 +507,7 @@ class TransformerDecoderLayer(nn.Module):
         attn_output, cross_attn_kv_cache = self.cross_attention(
             self.cross_attention_norm(x),
             memory,
-            kv_cache=None if kv_cache is None else kv_cache[1],
+            kv_cache=kv_cache[1] if kv_cache else None,
             padding_mask=memory_padding_mask,
             queries_rope_offset=rope_offset
         )
