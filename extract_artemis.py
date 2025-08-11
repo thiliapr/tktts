@@ -43,7 +43,7 @@ def is_field_key_matching(field: lua_ast.Field, target_key: str) -> bool:
     return isinstance(field.key, lua_ast.Name) and field.key.id == target_key
 
 
-def extract_from_block(block: lua_ast.Field, lang_code: str) -> tuple[Optional[tuple[str, str]], str]:
+def extract_from_block(block: lua_ast.Field, lang_code: str) -> tuple[Optional[tuple[str, str, str]], str]:
     """
     从Lua AST字段块中提取语音信息和本地化文本内容
 
@@ -76,7 +76,7 @@ def extract_from_block(block: lua_ast.Field, lang_code: str) -> tuple[Optional[t
         >>> print(text)
         '清理后的日语文本'
     """
-    character_id = None  # 语音角色表四
+    character_id = None  # 语音角色ID
     character_name = None  # 语音角色名
     voice_file = None  # 语音文件路径
     text_segments = []  # 存储提取的文本片段
