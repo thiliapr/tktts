@@ -6,7 +6,7 @@
 import argparse
 import pathlib
 import random
-from os import cpu_count
+import os
 from typing import Optional
 from collections.abc import Iterator
 import librosa
@@ -24,6 +24,10 @@ from utils.checkpoint import TkTTSMetrics, load_checkpoint_train, save_checkpoin
 from utils.constants import DEFAULT_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.model import TkTTS
 from utils.tookit import parallel_map
+
+# 解除线程数量限制
+os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
+torch.set_num_threads(os.cpu_count())
 
 
 class TkTTSDataset(Dataset):
@@ -69,7 +73,7 @@ class TkTTSDataset(Dataset):
         fft_length: int,
         hop_length: int,
         win_length: int,
-        num_workers: int = cpu_count()
+        num_workers: int = os.cpu_count()
     ):
         self.sample_rate = sample_rate
         self.fft_length = fft_length
@@ -667,13 +671,13 @@ def main(args: argparse.Namespace):
     # 加载训练数据集
     train_dataset = TkTTSDataset(args.train_dataset, tokenizer, generation_config["sample_rate"], model_config.fft_length, generation_config["hop_length"], generation_config["win_length"])
     train_sampler = TkTTSDatasetSampler(train_dataset, args.train_max_batch_tokens)
-    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=cpu_count())
+    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=os.cpu_count())
 
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
         val_dataset = TkTTSDataset(args.val_dataset, tokenizer, generation_config["sample_rate"], model_config.fft_length, generation_config["hop_length"], generation_config["win_length"])
         val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
-        val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=cpu_count())
+        val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=os.cpu_count())
 
     # 开始训练
     for epoch in range(args.num_epochs):

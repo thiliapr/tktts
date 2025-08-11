@@ -3,6 +3,7 @@
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import os
 import pathlib
 import argparse
 from typing import Optional
@@ -13,6 +14,10 @@ import numpy as np
 from tqdm import tqdm
 from utils.checkpoint import load_checkpoint
 from utils.model import TkTTS
+
+# 解除线程数量限制
+os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
+torch.set_num_threads(os.cpu_count())
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
