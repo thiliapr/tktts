@@ -29,14 +29,14 @@ def main(args: argparse.Namespace):
     tokenizer, _, _, _ = load_checkpoint(args.ckpt_path)
 
     # 获取所有标签并排序（以`[`开头并以`]`结尾的 special_token）
-    tags = sorted(token for token in tokenizer.get_added_vocab() if token.startswith("[") and token.endswith("]"))
+    tags = sorted(token[1:-1] for token in tokenizer.get_added_vocab() if token.startswith("[") and token.endswith("]"))
 
     # 删除特殊 token
     tags.remove("UNK")
 
     # 打印标签列表
     for tag in tags:
-        print(tag[1:-1])
+        print(tag)
 
 
 if __name__ == "__main__":
