@@ -55,7 +55,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="初始化一个检查点")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点保存目录路径")
-    parser.add_argument("-sr", "--sample-rate", type=float, default=DEFAULT_SAMPLE_RATE, help="目标采样率(Hz)，默认为 %(default)s")
+    parser.add_argument("-sr", "--sample-rate", type=int, default=DEFAULT_SAMPLE_RATE, help="目标采样率(Hz)，默认为 %(default)s")
     parser.add_argument("-fl", "--fft-length", type=int, default=DEFAULT_FFT_LENGTH, help="FFT窗口长度，默认为 %(default)s")
     parser.add_argument("-hl", "--hop-length", type=int, default=DEFAULT_HOP_LENGTH, help="帧移长度，默认为 %(default)s")
     parser.add_argument("-wl", "--win-length", type=int, default=DEFAULT_WIN_LENGTH, help="窗函数长度，默认为 %(default)s")

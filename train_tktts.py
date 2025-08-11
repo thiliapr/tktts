@@ -65,7 +65,7 @@ class TkTTSDataset(Dataset):
         self,
         data_dirs: list[pathlib.Path],
         tokenizer: AutoTokenizer,
-        sample_rate: float,
+        sample_rate: int,
         fft_length: int,
         hop_length: int,
         win_length: int,

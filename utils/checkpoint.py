@@ -23,7 +23,7 @@ class GenerationConfig(TypedDict):
         win_length: 窗函数长度
     """
     num_heads: int
-    sample_rate: float
+    sample_rate: int
     hop_length: int
     win_length: int
 
