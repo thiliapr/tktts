@@ -392,8 +392,8 @@ def audio_and_stop_loss(
     Args:
         audio_preds: 模型预测的组合谱图张量，形状为 (B, T, D)
         stop_preds: 停止信号的预测logits张量，形状为 (B, T)
-        spec_targets: 真实的组合谱图目标张量，形状为 (B, T + 1, D)
-        audio_targets: 真实的停止信号目标张量，形状为 (B, T)
+        audio_targets: 真实的组合谱图目标张量，形状为 (B, T + 1, D)
+        stop_targets: 真实的停止信号目标张量，形状为 (B, T)
         stop_weights: 停止信号的样本权重张量，形状为 (B, T)
         target_mask: 标识填充位置的布尔掩码张量，形状为 (B, T + 1)
 
@@ -402,21 +402,21 @@ def audio_and_stop_loss(
     """
     # 计算组合谱图的L1损失（仅计算有效区域）
     # 注意：预测比目标序列少一个时间步（自回归特性）
-    spec_loss = F.l1_loss(audio_preds, audio_targets[:, 1:], reduction="none")
+    audio_loss = F.l1_loss(audio_preds, audio_targets[:, 1:], reduction="none")
 
     # 创建非填充区域的3D掩码（排除第一个时间步）
     non_padding_mask = ~target_mask[:, 1:].unsqueeze(-1)  # 形状 (B, T, 1)
-    non_padding_mask = non_padding_mask.expand_as(spec_loss)  # 扩展至 (B, T, D)
+    non_padding_mask = non_padding_mask.expand_as(audio_loss)  # 扩展至 (B, T, D)
 
     # 计算有效区域的平均音频损失
-    valid_spec_loss = (spec_loss * non_padding_mask).sum()
-    valid_spec_loss /= non_padding_mask.sum()
+    valid_audio_loss = (audio_loss * non_padding_mask).sum()
+    valid_audio_loss /= non_padding_mask.sum()
 
     # 计算停止信号的加权二值交叉熵损失
     stop_loss = F.binary_cross_entropy_with_logits(stop_preds, stop_targets, weight=stop_weights)
 
     # 返回组合损失（谱图损失 + 停止损失）
-    return valid_spec_loss + stop_loss
+    return valid_audio_loss + stop_loss
 
 
 def train(

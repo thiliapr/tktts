@@ -64,11 +64,11 @@ def main(args: argparse.Namespace):
     # 循环生成音频
     for _ in tqdm(range(args.max_frames)):
         # 生成新的一帧并拼接
-        (current_frame, stop_token), kv_cache = model(target=current_frame, source=None, kv_cache=kv_cache)
+        (current_frame, stop_pred), kv_cache = model(target=current_frame, source=None, kv_cache=kv_cache)
         generated_audio = torch.cat([generated_audio, current_frame], dim=1)
 
         # 判断是否应该结束生成
-        if stop_token.item() > args.stop_threshold:
+        if stop_pred.item() > args.stop_threshold:
             break
 
     # 删除起始帧并去掉批次维度
