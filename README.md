@@ -102,7 +102,7 @@ Module DecoderLayer:
         .sa_norm, .ca_norm, .ff_norm: ScaleNorm
     forward(target, memory):
         norm_target = sa_norm(target)
-        x = target + .sa(norm_target, norm_target) * .sa_scale
+        x = target + .sa(norm_target, norm_target, is_causal=True) * .sa_scale
         x = x + .ca(.ca_norm(x), memory) * .ca_scale
         x = x + .ff(.ff_norm(x)) * .ff_scale
 Module TkTTS:
