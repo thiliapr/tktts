@@ -163,7 +163,7 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> TkTTSConfig:
     num_layers = len(layer_indices)
 
     # 从输出层获取 FFT 窗口长度
-    fft_length = model_state["spec_proj.weight"].size(0) * 2 // 3 - 2
+    fft_length = model_state["audio_predictor.weight"].size(0) * 2 // 3 - 2
 
     # 自动计算注意力头数和每个头的维度
     assert dim_model % num_heads == 0, f"模型维度应该能被注意力头数整除，但并没有: 模型维度({dim_model}) % 注意力头数({num_heads}) != 0"
