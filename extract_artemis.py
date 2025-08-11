@@ -195,6 +195,10 @@ def convert_and_save(
             # 查找最佳匹配的语音文件
             audio_file = find_highest_priority_file((voice_dir / character_id).glob(f"{voice_file}.*"), audio_suffixes)
 
+            # 找不到文件就跳过
+            if not audio_file:
+                continue
+
             # 添加文本-语音映射条目
             text_audio_mappings.append((character_id, dialogue_text, audio_file))
 
