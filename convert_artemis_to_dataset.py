@@ -74,6 +74,9 @@ def convert_and_save(
                 "tags": tags
             }))
 
+            # 更新进度条
+            progress_bar.update()
+
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
