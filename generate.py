@@ -75,7 +75,7 @@ def main(args: argparse.Namespace):
     generated_audio = generated_audio[0, 1:]
 
     # 分解为幅度谱、相位cos谱、相位sin谱
-    magnitude, phase_cos, phase_sin = torch.split(generated_audio, split=3, dim=-1)
+    magnitude, phase_cos, phase_sin = torch.split(generated_audio, 3, dim=-1)
 
     # 合成相位谱
     phase = torch.atan2(phase_sin, phase_cos)
