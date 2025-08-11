@@ -60,7 +60,7 @@ def main(args: argparse.Namespace):
     source = torch.tensor([source], device=device)
 
     # 创建起始帧
-    start_frame = torch.zeros(1, 1, model_config.fft_length * 3 // 2 + 3)
+    start_frame = torch.zeros(1, 1, model_config.fft_length * 3 // 2 + 3, device=device)
 
     # 前向传播获取 KV Cache
     (current_frame, _), kv_cache = model(source, start_frame)
