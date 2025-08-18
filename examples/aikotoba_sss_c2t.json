@@ -1,6 +1,6 @@
 {
-    "shi": ["sex:female", "age:teenager", "voice_actor:飴川紫乃", "character:星継銀音"],
-    "kko": ["sex:female", "age:adult", "voice_actor:北大路ゆき", "character:Ｋ子"],
-    "coa": ["sex:female", "age:teenager", "voice_actor:風音", "character:コーチ"],
-    "uko": ["sex:female", "age:teenager", "voice_actor:秋野花", "character:Ｕ子"]
+    "shi": {"positive_prompt": ["sex:female", "age:teenager", "voice_actor:飴川紫乃", "character:星継銀音"]},
+    "kko": {"positive_prompt": ["sex:female", "age:adult", "voice_actor:北大路ゆき", "character:Ｋ子"]},
+    "coa": {"positive_prompt": ["sex:female", "age:teenager", "voice_actor:風音", "character:コーチ"]},
+    "uko": {"positive_prompt": ["sex:female", "age:teenager", "voice_actor:秋野花", "character:Ｕ子"]}
 }

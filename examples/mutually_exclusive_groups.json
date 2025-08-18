@@ -1,0 +1,8 @@
+[
+    ["sex:male", "sex:female"],
+    ["age:children", "age:teenager", "age:adult", "age:old"],
+    ["voice_actor:遥そら", "voice_actor:北見六花", "voice_actor:木住葵", "voice_actor:桜川未央", "voice_actor:沢澤砂羽", "voice_actor:山崎高", "voice_actor:ちとせ杏", "voice_actor:小鳥居夕花", "voice_actor:真宮ゆず", "voice_actor:佐藤みかん", "voice_actor:由嘉鈍","voice_actor:椨もんじゃ", "voice_actor:白砂菓夏海", "voice_actor:東シヅ", "voice_actor:七種結花", "voice_actor:奏雨", "voice_actor:天知遥", "voice_actor:碓氷珊瑚", "voice_actor:秋野花", "voice_actor:相模恋", "voice_actor:ナオト†サンクチュアリ", "voice_actor:御苑生メイ", "voice_actor:北大路ゆき", "voice_actor:飴川紫乃","voice_actor:風音"],
+    ["character:コーチ", "character:トウリ", "character:バアさん", "character:ファイブ", "character:ムラサメ", "character:モンステラ", "character:レナ·リヒテナウアー", "character:一ノ瀬七", "character:一色奏命", "character:中条比奈実", "character:北条空", "character:北条花", "character:夜刀くくる", "character:大屋汐莉", "character:常陸茉子", "character:成宮帝雄", "character:星継銀音", "character:朝武安晴", "character:朝武秋穂", "character:朝武芳乃", "character:猪谷心子", "character:獅童龍司", "character:葦華真智", "character:蓼科イヴ", "character:西山冴希", "character:鞍馬小春", "character:鞍馬廉太郎", "character:鞍馬玄十郎", "character:駒川みづは", "character:Ｋ子", "character:Ｕ子"],
+    ["voice_actor:ちとせ杏", "voice_actor:ナオト†サンクチュアリ", "voice_actor:七種結花", "voice_actor:佐藤みかん", "voice_actor:北大路ゆき", "voice_actor:北見六花", "voice_actor:天知遥", "voice_actor:奏雨", "voice_actor:小鳥居夕花", "voice_actor:山崎高", "voice_actor:御苑生メイ", "voice_actor:木住葵", "voice_actor:東シヅ", "voice_actor:桜川未央", "voice_actor:椨もんじゃ", "voice_actor:沢澤砂羽", "voice_actor:由嘉鈍", "voice_actor:白砂菓夏海", "voice_actor:相模恋", "voice_actor:真宮ゆず", "voice_actor:碓氷珊瑚", "voice_actor:秋野花", "voice_actor:遥そら", "voice_actor:風音", "voice_actor:飴川紫乃"],
+    ["source:アイコトバ -Silver Snow Sister-", "source:セレクトオブリージュ", "source:千恋＊万花"]
+]

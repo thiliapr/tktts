@@ -3,6 +3,7 @@
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import warnings
 import argparse
 import pathlib
 import random
@@ -11,9 +12,9 @@ import torch
 import numpy as np
 from torch import optim
 from transformers import AutoTokenizer
-from utils.checkpoint import save_checkpoint
-from utils.constants import DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH
-from utils.model import TkTTS, TkTTSConfig
+from utils.checkpoint import TagLabelEncoder, save_checkpoint
+from utils.constants import DEFAULT_FFT_CONV1_KERNEL_SIZE, DEFAULT_FFT_CONV2_KERNEL_SIZE, DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_MELS, DEFAULT_PREDICTOR_KERNEL_SIZE, DEFAULT_PYIN_FRAME_LENGTH, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH, DEFAULT_VARIANCE_BINS
+from utils.model import FastSpeech2, FastSpeech2Config
 
 
 def set_seed(seed: int):
@@ -55,14 +56,22 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="初始化一个检查点")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点保存目录路径")
+    parser.add_argument("-t", "--tags-file", type=pathlib.Path, help="包含标签的文件路径，格式是每行一个标签，默认不使用标签")
+    parser.add_argument("-nm", "--num-mels", type=int, default=DEFAULT_NUM_MELS, help="梅尔频率倒谱系数(MFCC)的数量，默认为 %(default)s")
     parser.add_argument("-sr", "--sample-rate", type=int, default=DEFAULT_SAMPLE_RATE, help="目标采样率(Hz)，默认为 %(default)s")
     parser.add_argument("-fl", "--fft-length", type=int, default=DEFAULT_FFT_LENGTH, help="FFT窗口长度，默认为 %(default)s")
-    parser.add_argument("-hl", "--hop-length", type=int, default=DEFAULT_HOP_LENGTH, help="帧移长度，默认为 %(default)s")
     parser.add_argument("-wl", "--win-length", type=int, default=DEFAULT_WIN_LENGTH, help="窗函数长度，默认为 %(default)s")
+    parser.add_argument("-hl", "--hop-length", type=int, default=DEFAULT_HOP_LENGTH, help="帧移长度，默认为 %(default)s")
+    parser.add_argument("-pl", "--pyin-frame-length", type=int, default=DEFAULT_PYIN_FRAME_LENGTH, help="pYIN算法的分析帧长度，应与 STFT 的 win_length 协调，通常设为 win_length 的2倍，默认为 %(default)s")
     parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="注意力头的数量，默认为 %(default)s")
     parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="每个注意力头的维度，默认为 %(default)s")
     parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="前馈网络的隐藏层维度，默认为 %(default)s")
-    parser.add_argument("-nl", "--num-layers", type=int, default=DEFAULT_NUM_LAYERS, help="Transformer En/Decoder 层的数量，默认为 %(default)s")
+    parser.add_argument("-fk1", "--fft-kernel-size-1", type=int, default=DEFAULT_FFT_CONV1_KERNEL_SIZE, help="FFT第一个卷积核大小，默认为 %(default)s")
+    parser.add_argument("-fk2", "--fft-kernel-size-2", type=int, default=DEFAULT_FFT_CONV2_KERNEL_SIZE, help="FFT第二个卷积核大小，默认为 %(default)s")
+    parser.add_argument("-pk", "--predictor-kernel-size", type=int, default=DEFAULT_PREDICTOR_KERNEL_SIZE, help="预测器卷积核大小，默认为 %(default)s")
+    parser.add_argument("-vb", "--variance-bins", type=int, default=DEFAULT_VARIANCE_BINS, help="变异性预测器的 bins 数量，默认为 %(default)s")
+    parser.add_argument("-el", "--num-encoder-layers", type=int, default=DEFAULT_NUM_ENCODER_LAYERS, help="编码器层数，默认为 %(default)s")
+    parser.add_argument("-dl", "--num-decoder-layers", type=int, default=DEFAULT_NUM_DECODER_LAYERS, help="解码器层数，默认为 %(default)s")
     parser.add_argument("-u", "--seed", default=8964, type=int, help="初始化检查点的种子，保证训练过程可复现，默认为 %(default)s")
     return parser.parse_args(args)
 
@@ -72,23 +81,45 @@ def main(args: argparse.Namespace):
     if args.fft_length % 2 == 1:
         raise RuntimeError("FFT 窗口长度必须为偶数。")
 
-    # 设置随机种子，确保可复现性
-    set_seed(args.seed)
-
     # 加载分词器
-    tokenizer_path = (args.ckpt_path / "tokenizer")
-    if not tokenizer_path.exists():
+    if not (tokenizer_path := args.ckpt_path / "tokenizer").exists():
         raise RuntimeError("你应该先训练分词器再初始化检查点，因为创建模型模型需要提供分词器的大小。")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
+    # 检查标签文件是否存在
+    tags = ["[PAD]"]  # 添加默认的填充标签
+    if args.tags_file:
+        tags.extend(tag.strip() for tag in args.tags_file.read_text("utf-8").splitlines() if tag.strip())
+    else:
+        # 如果没有自定义标签，则警告
+        warnings.warn(
+            "你没有提供标签，这会大大削弱模型的表现力。\n"
+            "如果你不确定训练时数据集是否带有标签，最保险的方法，\n"
+            "请运行`python list_tags_from_datasets.py /path/to/your_dataset -o /path/to/tags.txt`，\n"
+            "然后在运行本脚本时带上参数`-t /path/to/tags.txt`"
+        )
+
+    # 创建标签编码器
+    tag_label = {tag: idx for idx, tag in enumerate(tags)}
+    tag_label_encoder = TagLabelEncoder(tag_label)
+
+    # 设置随机种子，确保可复现性
+    set_seed(args.seed)
+
     # 初始化模型
-    model = TkTTS(TkTTSConfig(
+    model = FastSpeech2(FastSpeech2Config(
         vocab_size=len(tokenizer),
-        fft_length=args.fft_length,
+        num_tags=len(tag_label),
+        num_mels=args.num_mels,
         num_heads=args.num_heads,
         dim_head=args.dim_head,
         dim_feedforward=args.dim_feedforward,
-        num_layers=args.num_layers
+        fft_conv1_kernel_size=args.fft_kernel_size_1,
+        fft_conv2_kernel_size=args.fft_kernel_size_2,
+        predictor_kernel_size=args.predictor_kernel_size,
+        variance_bins=args.variance_bins,
+        num_encoder_layers=args.num_encoder_layers,
+        num_decoder_layers=args.num_decoder_layers,
     ))
 
     # 初始化优化器
@@ -101,12 +132,14 @@ def main(args: argparse.Namespace):
     generation_config = {
         "num_heads": args.num_heads,
         "sample_rate": args.sample_rate,
+        "fft_length": args.fft_length,
+        "pyin_frame_length": args.pyin_frame_length,
         "hop_length": args.hop_length,
         "win_length": args.win_length,
     }
 
     # 保存为检查点
-    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), metrics, generation_config)
+    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), metrics, generation_config, tag_label_encoder)
 
 
 if __name__ == "__main__":

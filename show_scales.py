@@ -25,15 +25,14 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace):
-    _, model_state, _, model_config = load_checkpoint(args.ckpt_path)
+    _, model_state, _, model_config, _ = load_checkpoint(args.ckpt_path)
 
-    for layer_idx in range(model_config.num_layers):
+    for layer_idx in range(model_config.num_encoder_layers):
         print(f"encoder[{layer_idx:03d}].attn_scale       {model_state[f'encoder.{layer_idx}.attention_scale'].item():.3f}")
         print(f"encoder[{layer_idx:03d}].ff_scale         {model_state[f'encoder.{layer_idx}.feedforward_scale'].item():.3f}")
 
-    for layer_idx in range(model_config.num_layers):
-        print(f"decoder[{layer_idx:03d}].self_attn_scale  {model_state[f'decoder.{layer_idx}.self_attention_scale'].item():.3f}")
-        print(f"decoder[{layer_idx:03d}].cross_attn_scale {model_state[f'decoder.{layer_idx}.cross_attention_scale'].item():.3f}")
+    for layer_idx in range(model_config.num_decoder_layers):
+        print(f"decoder[{layer_idx:03d}].attn_scale       {model_state[f'decoder.{layer_idx}.attention_scale'].item():.3f}")
         print(f"decoder[{layer_idx:03d}].ff_scale         {model_state[f'decoder.{layer_idx}.feedforward_scale'].item():.3f}")
 
 

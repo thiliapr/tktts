@@ -15,7 +15,8 @@ def convert_and_save(
     script_files: list[pathlib.Path],
     character_label_mapping: dict[str, list[str]],
     output_dir: pathlib.Path,
-    extra_tags: list[str]
+    global_positive_prompt: list[str],
+    global_negative_prompt: list[str]
 ):
     """
     将脚本文件中的对话转换并保存到指定目录。
@@ -26,7 +27,8 @@ def convert_and_save(
         script_files: 包含脚本文件路径的列表。
         character_label_mapping: 角色标签映射表，包含角色ID与其标签的对应关系。
         output_dir: 输出目录，用于保存转换后的文件。
-        extra_tags: 额外的标签列表，将与角色特定标签合并。
+        global_positive_prompt: 额外的正面标签列表，将与角色特定标签合并。
+        global_negative_prompt: 额外的负面标签列表，将与角色特定标签合并。
     """
     # 初始化进度条
     progress_bar = tqdm()
@@ -62,16 +64,20 @@ def convert_and_save(
                 continue
 
             # 生成标签列表
-            tags = extra_tags.copy()
+            positive_prompt = global_positive_prompt.copy()
+            negative_prompt = global_negative_prompt.copy()
 
             # 从映射表获取角色特定标签
-            tags += character_label_mapping[dialogue["character_id"]]
+            character_label = character_label_mapping.get(dialogue["character_id"], {})
+            positive_prompt += character_label.get("positive_prompt", [])
+            negative_prompt += character_label.get("negative_prompt", [])
 
             # 写入标签文件
             audio_metadata_file = (target_audio_path.parent / (target_audio_path.name + ".json"))
             audio_metadata_file.write_bytes(orjson.dumps({
                 "text": dialogue["text_content"],
-                "tags": tags
+                "positive_prompt": positive_prompt,
+                "negative_prompt": negative_prompt
             }))
 
             # 更新进度条
@@ -92,7 +98,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("script_dir", type=pathlib.Path, help="包含预处理后脚本文件的目录，这些文件应是由 extract_artemis.py 生成的 JSON 文件")
     parser.add_argument("character_label_mapping", type=pathlib.Path, help="格式为 {角色ID: [标签1, 标签2, ...]}，需要手动创建此映射")
     parser.add_argument("output_dir", type=pathlib.Path, help="结构为 {输出目录}/{角色ID}/{音频文件} 和对应的 JSON 标签文件")
-    parser.add_argument("-t", "--tag", type=str, action="append", default=[], help="给提取出来的数据集加全局标签，可以多次使用此选项。例如: 用`-t source:セレクトオブリージュ`表示数据集来源")
+    parser.add_argument("-p", "--global-positive-prompt", type=str, action="append", default=[], help="给提取出来的数据集加全局正面标签，可以多次使用此选项。例如: 用`-pp source:セレクトオブリージュ`表示数据集来源")
+    parser.add_argument("-n", "--global-negative-prompt", type=str, action="append", default=[], help="给提取出来的数据集加全局负面标签，可以多次使用此选项")
     return parser.parse_args(args)
 
 
@@ -104,7 +111,7 @@ def main(args: argparse.Namespace):
     character_label_mapping = orjson.loads(args.character_label_mapping.read_bytes())
 
     # 并行执行转换任务
-    convert_and_save(script_files, character_label_mapping, args.output_dir, args.tag)    
+    convert_and_save(script_files, character_label_mapping, args.output_dir, args.global_positive_prompt, args.global_negative_prompt)    
 
 
 if __name__ == "__main__":

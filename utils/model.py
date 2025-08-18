@@ -5,14 +5,11 @@
 
 import copy
 import math
-from typing import NamedTuple, Optional, overload
+from typing import NamedTuple, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
-
-AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
-LayerKVCache = tuple[AttentionKVCache, AttentionKVCache]
-NetKVCache = list[LayerKVCache]
+from torch.nn.utils.rnn import pad_sequence
 
 
 class ScaleNorm(nn.Module):
@@ -50,33 +47,20 @@ class ScaleNorm(nn.Module):
 
 class MultiheadAttention(nn.Module):
     """
-    多头注意力机制模块，实现基于旋转位置编码(RoPE)的自注意力和交叉注意力计算。
+    多头自注意力机制模块，实现基于旋转位置编码(RoPE)的自注意力计算。
 
     本模块主要工作流程：
     1. 通过线性投影将输入转换为查询(Q)、键(K)和值(V)张量
     2. 对Q和K应用旋转位置编码(RoPE)注入位置信息
-    3. 计算缩放点积注意力，支持因果掩码和填充掩码
+    3. 计算缩放点积注意力，支持填充掩码
     4. 合并多头输出并通过线性投影得到最终结果
 
-    支持以下特性：
-    - KV缓存机制，用于高效的自回归生成
-    - 增量解码时的位置编码缓存
-    - 可配置的注意力头数和每头维度
-    - 可选的dropout正则化
-
     Inputs:
-        queries: 查询张量，形状为 (batch_size, seq_len_q, dim_model)
-        keys_values: 键值张量，形状为 (batch_size, seq_len_k, dim_model)，在自注意力模式下与queries相同。kv_cache 不为 None 时，keys_values 可为 None
-        padding_mask: 填充掩码，形状为 (batch_size, seq_len)
-        kv_cache: 键值缓存元组，包含 (K_cache, V_cache)
-        queries_rope_offset: 查询序列在RoPE位置编码中的起始偏移量
-        keys_rope_offset: 键序列在RoPE位置编码中的起始偏移量
-        is_causal: 是否使用因果注意力掩码
+        qkv: 查询、键值共享张量；由于使用的是自注意力，所以假设查询、键、值相同，形状为 (batch_size, seq_len_q, dim_model)
+        padding_mask: 填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False
 
     Outputs:
-        元组包含:
-        - 注意力输出张量，形状为(batch_size, seq_len, dim_model)
-        - 更新后的键值缓存(KV cache)
+        注意力输出张量，形状为 (batch_size, seq_len, dim_model)
     """
 
     def __init__(self, dim_head: int, num_heads: int, dropout: float = 0., device: Optional[torch.device] = None):
@@ -87,8 +71,7 @@ class MultiheadAttention(nn.Module):
         dim_model = dim_head * num_heads  # 总模型维度 = 头数 * 每头维度
 
         # 查询、键值投影矩阵
-        self.queries_proj = nn.Linear(dim_model, dim_model, device=device)
-        self.kv_proj = nn.Linear(dim_model, dim_model * 2, device=device)
+        self.qkv_proj = nn.Linear(dim_model, dim_model * 3, device=device)
 
         # 输出投影矩阵，将多头输出合并回原始维度
         self.out_proj = nn.Linear(dim_model, dim_model, device=device)
@@ -102,11 +85,11 @@ class MultiheadAttention(nn.Module):
         self.register_buffer("freqs_cis_cache", torch.empty(0, dim_head // 2, device=device), persistent=False)
 
         # 使用 Xavier 均匀分布初始化查询、键、值、投影权重
-        for module in [self.queries_proj, self.kv_proj, self.out_proj]:
+        for module in [self.qkv_proj, self.out_proj]:
             nn.init.xavier_uniform_(module.weight)
             nn.init.zeros_(module.bias)
 
-    def apply_rope(self, x: torch.Tensor, rope_offset: int = 0) -> torch.Tensor:
+    def apply_rope(self, x: torch.Tensor) -> torch.Tensor:
         """
         应用旋转位置编码(RoPE)到输入张量。
 
@@ -116,14 +99,8 @@ class MultiheadAttention(nn.Module):
         3. 通过复数乘法实现旋转操作
         4. 将旋转后的复数转换回实数表示
 
-        该方法支持增量计算：
-        - 维护旋转频率缓存(freqs_cis_cache)避免重复计算
-        - 当序列长度超过缓存大小时自动扩展缓存
-        - 支持从指定位置开始应用旋转编码
-
         Args:
             x: 输入张量，形状为 [batch, num_heads, seq_len, dim_head]
-            rope_offset: 序列在位置编码中的起始偏移量，用于增量解码
 
         Returns:
             应用旋转位置编码后的张量，形状与输入相同
@@ -133,11 +110,11 @@ class MultiheadAttention(nn.Module):
 
         # 检查并更新旋转频率缓存
         current_cache_len = self.freqs_cis_cache.size(0)
-        if current_cache_len < rope_offset + required_seq_len:
+        if current_cache_len < required_seq_len:
             # 生成缺失位置的时间索引
             new_positions = torch.arange(
                 current_cache_len,
-                rope_offset + required_seq_len,
+                required_seq_len,
                 device=self.inv_freq.device
             )
             # 计算新位置的旋转频率
@@ -148,9 +125,10 @@ class MultiheadAttention(nn.Module):
             self.freqs_cis_cache = torch.cat([self.freqs_cis_cache, new_cis], dim=0)
 
         # 获取当前序列所需的旋转频率
-        freqs_cis = self.freqs_cis_cache[rope_offset:rope_offset + required_seq_len]
+        freqs_cis = self.freqs_cis_cache[:required_seq_len]
 
         # 将最后维度重塑为复数对 (..., dim_head//2, 2)
+        # 这里转换为 float 是因为半精度复数运算不被支持
         complex_shape = x.shape[:-1] + (-1, 2)
         complex_pairs = x.float().reshape(complex_shape)
 
@@ -165,503 +143,444 @@ class MultiheadAttention(nn.Module):
 
         # 转换回实数表示
         rotated_real = torch.view_as_real(rotated_complex)
+
         # 展平最后两个维度 (..., dim_head//2, 2) -> (..., dim_head)
         rotated_output = rotated_real.flatten(-2).to(dtype=x.dtype)
-
-        # 组合结果：未旋转部分 + 旋转后的部分
         return rotated_output
 
-    @overload
     def forward(
         self,
-        queries: torch.Tensor,
-        keys_values: Optional[torch.Tensor],
-        padding_mask: None,
-        kv_cache: AttentionKVCache,
-        queries_rope_offset: int,
-        keys_rope_offset: int,
-        is_causal: bool,
-    ) -> tuple[torch.Tensor, AttentionKVCache]:
-        ...
-
-    @overload
-    def forward(
-        self,
-        queries: torch.Tensor,
-        keys_values: torch.Tensor,
-        padding_mask: Optional[torch.BoolTensor],
-        kv_cache: None,
-        queries_rope_offset: int,
-        keys_rope_offset: int,
-        is_causal: bool,
-    ) -> tuple[torch.Tensor, AttentionKVCache]:
-        ...
-
-    def forward(
-        self,
-        queries,
-        keys_values=None,
-        padding_mask=None,
-        kv_cache=None,
-        queries_rope_offset=0,
-        keys_rope_offset=0,
-        is_causal=False,
-    ):
-        batch_size, seq_len, _ = queries.shape
-
-        # 万恶的检查。为什么不能假设用户已经按照类型标注的去做呢？
-        assert keys_values is not None or kv_cache, "至少提供 keys_values 或 kv_cache 中一个。"
-        assert not is_causal or queries is keys_values, "交叉注意力使用因果掩码，你真是个小天才。"
+        qkv: torch.Tensor,
+        padding_mask: torch.BoolTensor,
+    ) -> torch.Tensor:
+        batch_size, seq_len, _ = qkv.shape
 
         # 计算查询、键值投影 [batch, seq_len, dim_model]
-        queries = self.queries_proj(queries)
-        if keys_values is not None:
-            keys, values = self.kv_proj(keys_values).chunk(2, dim=-1)
+        queries, keys, values = self.qkv_proj(qkv).chunk(3, dim=-1)  # 分割为 Q, K, V
 
         # 调整查询、键、值形状为 [batch, seq_len, num_heads, dim_head]，并重排维度为 PyTorch 注意力要求的形状 [batch, heads, seq_len, dim_head]
         queries = queries.view(batch_size, seq_len, self.num_heads, self.dim_head).transpose(1, 2)
-        if keys_values is not None:
-            keys = keys.view(batch_size, -1, self.num_heads, self.dim_head).transpose(1, 2)
-            values = values.view(batch_size, -1, self.num_heads, self.dim_head).transpose(1, 2)
+        keys = keys.view(batch_size, -1, self.num_heads, self.dim_head).transpose(1, 2)
+        values = values.view(batch_size, -1, self.num_heads, self.dim_head).transpose(1, 2)
 
         # 应用 RoPE 到 Q/K
-        queries = self.apply_rope(queries, queries_rope_offset)
-        if queries is keys_values:  # 仅在自注意力模式对 keys 进行位置编码
-            keys = self.apply_rope(keys, keys_rope_offset)
+        queries = self.apply_rope(queries)
+        keys = self.apply_rope(keys)
 
-        # 应用 KV Cache
-        if kv_cache:
-            # 拼接缓存
-            if keys_values is None:
-                keys, values = kv_cache
-            else:
-                keys = torch.cat([kv_cache[0], keys], dim=2)
-                values = torch.cat([kv_cache[1], values], dim=2)
+        # 计算填充掩码，形状为 [batch, seq_len, seq_len]
+        attn_mask = padding_mask.unsqueeze(1) | padding_mask.unsqueeze(2)
 
-        # 处理注意力掩码
-        if padding_mask is None:
-            attn_mask = None
-            use_builtin_causal = is_causal
-        else:
-            # 这里不使用内置因果掩码的原因是，F.scaled_dot_product_attention 不支持同时使用 attn_mask 和 is_causal
-            use_builtin_causal = False
-
-            if is_causal:
-                causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=queries.device).triu(diagonal=1)
-                attn_mask = (
-                    causal_mask.unsqueeze(0)
-                    | padding_mask.unsqueeze(1)
-                    | padding_mask.unsqueeze(2)
-                )
-            else:
-                attn_mask = padding_mask.unsqueeze(1).expand(-1, queries.size(2), -1)
-
-            attn_mask = attn_mask.unsqueeze(1)
-            attn_mask = torch.where(attn_mask, -torch.inf, 0.)
+        # 显式转化为 float 类型掩码，避免版本兼容性问题
+        # 比如在大部分包（transformers 等），True 表示填充
+        # 但在 torch.nn.functional.scaled_dot_product_attention 中，True 表示允许注意力
+        attn_mask = torch.where(attn_mask, -torch.inf, 0.0)
+        
+        # 扩展掩码以匹配多头注意力的要求，形状为 [batch, 1, seq_len, seq_len]
+        attn_mask = attn_mask.unsqueeze(1)
 
         # 计算缩放点积注意力
         attn_output = F.scaled_dot_product_attention(
             queries, keys, values,
             attn_mask=attn_mask,
             dropout_p=(self.dropout_rate if self.training else 0.),
-            is_causal=use_builtin_causal
         )
 
         # 合并多头输出 (batch, seq_len, dim_model)
-        return self.out_proj(attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1)), (keys, values)
+        return self.out_proj(attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1))
 
 
-class TransformerEncoderLayer(nn.Module):
+class Conv(nn.Module):
     """
-    Transformer 编码器层，实现基于Transformer的特征编码
-
-    该层包含多头自注意力机制和前馈神经网络两个核心组件，使用残差连接和缩放归一化。
-    工作流程：
-      1. 输入张量首先通过注意力归一化层
-      2. 计算多头自注意力并应用缩放因子
-      3. 通过残差连接和Dropout合并注意力结果
-      4. 处理后的张量通过前馈网络归一化层
-      5. 通过前馈神经网络并应用缩放因子
-      6. 再次通过残差连接和Dropout生成最终输出
-
-    层设计特点：
-      - 使用ScaleNorm代替LayerNorm增强训练稳定性
-      - 引入可学习的缩放因子调整各模块贡献
-      - 残差连接缓解梯度消失问题
-
-    Args:
-        num_heads: 注意力头的数量
-        dim_head: 每个注意力头的维度
-        dim_feedforward: 前馈网络中间层维度
-        dropout: Dropout概率值，默认为0
-        device: 模型参数所在的设备
+    Conv 是一个自定义的卷积层。它在输入张量的维度上进行转换，以适应多头注意力机制的输入要求。
+    该层将输入张量从形状 [batch_size, seq_len, dim_model] 转换为 [batch_size, dim_model, seq_len]，以便进行卷积操作。
+    在 forward 方法中，输入张量会先进行维度转换，然后调用父类的 forward 方法进行卷积操作，最后再将输出张量转换回原始形状 [batch_size, seq_len, dim_model]。
 
     Inputs:
-        x: 输入特征张量，形状为 [batch_size, seq_len, dim_model]
-        padding_mask: 可选的填充掩码，形状为 [batch_size, seq_len]
-
+        x: 输入张量，形状为 (batch_size, seq_len, dim_model)
+    
     Outputs:
-        编码后的特征张量，形状为[batch_size, seq_len, dim_model]
-
-    Examples:
-        >>> layer = TkTTSEncoderLayer(num_heads=4, dim_head=64, dim_feedforward=1024)
-        >>> inputs = torch.randn(2, 50, 256)  # 示例输入
-        >>> outputs = layer(inputs)
+        处理后的张量
     """
 
-    def __init__(
-        self,
-        num_heads: int,
-        dim_head: int,
-        dim_feedforward: int,
-        dropout: float = 0.,
-        device: Optional[torch.device] = None
-    ):
+    def __init__(self, *args, **kwargs):
         super().__init__()
-        dim_model = dim_head * num_heads  # 计算模型总维度
+        self.model = nn.Conv1d(*args, **kwargs)
 
-        # 初始化多头自注意力模块
-        self.attention = MultiheadAttention(
-            dim_head=dim_head,
-            num_heads=num_heads,
-            dropout=dropout,
-            device=device
-        )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.transpose(1, 2)  # 转换为 [batch_size, dim_model, seq_len]
+        x = self.model(x)  # 调用父类的 forward 方法
+        x = x.transpose(1, 2)  # 恢复为 [batch_size, seq_len, dim_model]
+        return x  # 返回处理后的张量
 
-        # 前馈神经网络定义（线性层+GELU激活）
-        self.feedforward = nn.Sequential(
-            nn.Linear(dim_model, dim_feedforward, device=device),
-            nn.GELU(approximate="tanh"),  # 使用tanh近似的GELU
-            nn.Linear(dim_feedforward, dim_model, device=device)
-        )
 
-        # 初始化归一化层
-        self.attention_norm = ScaleNorm(dim_model, device=device)
-        self.feedforward_norm = ScaleNorm(dim_model, device=device)
+class FFTBlock(nn.Module):
+    """
+    FFTBlock 是一个基于多头注意力和前馈网络的模块，主要用于处理序列数据。它包含自注意力机制和前馈网络，并使用缩放归一化来增强模型的稳定性。
 
-        # 初始化可学习缩放因子
-        self.attention_scale = nn.Parameter(torch.zeros(1, device=device))
-        self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
+    工作流程如下：
+        1. 输入张量通过多头注意力机制进行处理，计算注意力输出。
+        2. 将注意力输出与输入张量相加，并应用缩放归一化。
+        3. 输入张量经过前馈网络处理，得到新的表示。
+        4. 将前馈网络输出与注意力输出相加，并再次应用缩放归一化。
 
-        # 共享的Dropout层
+    Args:
+        dim_head: 每个注意力头的维度。
+        num_heads: 注意力头的数量。
+        dim_feedforward: 前馈网络的隐藏层维度。
+        conv1_kernel_size: 前馈网络中第一个卷积层的内核大小。
+        conv2_kernel_size: 前馈网络中第二个卷积层的内核大小。
+        dropout: Dropout 概率，用于防止过拟合。
+        device: 可选的设备参数，用于指定模型运行的设备。
+
+    Inputs:
+        x: 输入张量，形状为 (batch_size, seq_len, dim_model)
+        padding_mask: 填充掩码，形状为 (batch_size, seq_len)，用于指示哪些位置是填充的。
+
+    Outputs:
+        返回处理后的张量，形状与输入相同。
+    """
+
+    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, conv1_kernel_size: int, conv2_kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
+        super().__init__()
+        dim_model = dim_head * num_heads  # 总模型维度
+
+        # 自注意力和前馈网络
+        self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
+        self.conv1 = Conv(dim_model, dim_feedforward, conv1_kernel_size, padding=(conv1_kernel_size - 1) // 2, device=device)
+        self.activation = nn.GELU()
+        self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, padding=(conv2_kernel_size - 1) // 2, device=device)
+
+        # 归一化和缩放
+        self.attention_norm = ScaleNorm(dim_model)
+        self.feedforward_norm = ScaleNorm(dim_model)
+        self.attention_scale = nn.Parameter(torch.zeros(1))
+        self.feedforward_scale = nn.Parameter(torch.zeros(1))
+
+        # Dropout 层
         self.dropout = nn.Dropout(dropout)
 
-        # 使用Xavier均匀分布初始化前馈网络权重
-        for module in self.feedforward:
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
+        # 初始化权重
+        for module in [self.conv1, self.conv2]:
+            nn.init.xavier_uniform_(module.model.weight)
+            nn.init.zeros_(module.model.bias)
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        padding_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        # 注意力分支处理（自注意力时，kv=q）
-        normalized_x = self.attention_norm(x)
-        attn_output, _ = self.attention(
-            normalized_x, normalized_x,
-            padding_mask=padding_mask,
-        )
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
+        # 多头注意力计算
+        x = x + self.dropout(self.attention(self.attention_norm(x), padding_mask) * self.attention_scale)
 
-        # 应用缩放因子和残差连接
-        x = x + self.dropout(attn_output * self.attention_scale)
+        # 前馈网络计算
+        res = x  # 保存残差连接
 
-        # 前馈网络分支处理
-        ff_output = self.feedforward(self.feedforward_norm(x))
+        # 归一化
+        x = self.feedforward_norm(x)
 
-        # 应用缩放因子和残差连接
-        x = x + self.dropout(ff_output * self.feedforward_scale)
+        # 填充位置置零，防止填充位置通过卷积污染正常位置
+        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
 
+        # 前馈网络第一层卷积
+        x = self.activation(self.conv1(x))
+
+        # 由于经过一次卷积，填充位置已经被正常位置污染（变得非零了），所以需要重新置零
+        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
+
+        # 第二次卷积后不填充位置置零是因为除了卷积层需要手动置零，其他层都不用管
+        x = self.dropout(self.conv2(x) * self.feedforward_scale)
+
+        # 残差连接
+        return res + x
+
+
+class VariancePredictor(nn.Module):
+    """
+    VariancePredictor 是一个用于预测时长、音高或能量的卷积神经网络模块。
+    它由多个卷积层组成，每个卷积层后面跟着缩放归一化、GELU 激活函数和 Dropout 层。
+
+    该模块的主要工作流程如下：
+        1. 输入张量通过一系列卷积层进行处理。
+        2. 每个卷积层后应用缩放归一化以增强模型的稳定性。
+        3. 使用 GELU 激活函数引入非线性。
+        4. 应用 Dropout 层以防止过拟合。
+        5. 最终通过一个卷积层输出预测结果。
+
+    Args:
+        dim_model: 输入张量的维度。
+        kernel_size: 卷积层的内核大小。
+        dropout: Dropout 概率，用于防止过拟合。
+        device: 可选的设备参数，用于指定模型运行的设备。
+
+    Inputs:
+        x: 输入张量，形状为 (batch_size, seq_len, dim_model)
+        padding_mask: 填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False
+
+    Outputs:
+        返回预测的时长、音高或能量，形状为 (batch_size, seq_len)
+    """
+
+    def __init__(self, dim_model: int, kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
+        super().__init__()
+        self.conv1 = Conv(dim_model, dim_model, kernel_size, padding=(kernel_size - 1) // 2, device=device)
+        self.conv2 = Conv(dim_model, dim_model, kernel_size, padding=1, device=device)
+        self.output_layer = nn.Linear(dim_model, 1, device=device)
+        self.norm1 = ScaleNorm(dim_model)
+        self.norm2 = ScaleNorm(dim_model)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+
+        # 初始化权重
+        for module in [self.conv1, self.conv2]:
+            nn.init.xavier_uniform_(module.model.weight)
+            nn.init.zeros_(module.model.bias)
+        nn.init.xavier_uniform_(self.output_layer.weight)
+        nn.init.zeros_(self.output_layer.bias)
+
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
+        # 应用卷积模型
+        res = x  # 保存残差连接
+
+        # 将填充位置置零，防止填充位置通过卷积污染正常位置
+        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
+
+        # 第一层卷积和归一化
+        x = res + self.dropout(self.activation(self.conv1(self.norm1(x))))
+        res = x  # 保存残差连接
+
+        # 由于经过一次卷积，填充位置已经被正常位置污染（变得非零了），所以需要重新置零
+        # 具体来说，由于卷积操作会考虑邻近位置的值，如果邻近位置是非零的，那么填充位置经过卷积后也会变成非零
+        # 虽然填充位置已经是零，但填充位置旁的有效位置非零，通过卷积核的加权和，填充位置就会变成非零
+        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
+
+        # 第二层卷积和归一化
+        x = res + self.dropout(self.activation(self.conv2(self.norm2(x))))
+
+        # 最终输出层，形状为 [batch_size, seq_len, 1] => [batch_size, seq_len]
+        x = self.output_layer(x).squeeze(-1)
+
+        # 再次对填充位置置零，防止填充位置输出非零结果影响音高、能量或时长预测
+        # 其实如果是训练阶段，由于损失函数已经忽略了填充位置，所以这里可以不置零
+        # 但是如果有人在推理阶段批量处理数据，可能存在填充并影响输出，所以这里还是置零
+        x = x.masked_fill(padding_mask, 0)
         return x
 
 
-class TransformerDecoderLayer(nn.Module):
+class DifferentiableLengthRegulator(nn.Module):
     """
-    Transformer 解码器的单层实现，包含自注意力、交叉注意力和前馈网络三个核心组件。
-    该层支持增量解码和键值缓存(KV Cache)优化，特别适用于文本到语音(TTS)等序列生成任务。
+    可微分长度调节器，用于根据持续时间动态调整特征序列长度。
+    通过软对齐方式实现特征扩展，保持模型可微分性。
 
-    工作流程：
-    1. 输入目标序列首先通过自注意力机制处理，使用旋转位置编码和因果掩码确保自回归特性
-    2. 自注意力输出与记忆序列（编码器输出）进行交叉注意力计算
-    3. 交叉注意力结果通过前馈神经网络进行非线性变换
-    4. 每步操作后应用残差连接、层归一化和可学习的缩放因子
-    5. 支持增量解码模式，通过KV缓存避免重复计算
+    工作原理：
+    1. 计算输入特征的累积持续时间
+    2. 根据最大持续时间确定输出帧数
+    3. 使用softmax权重计算每帧对应的特征加权和
+    4. 通过温度系数控制对齐的尖锐程度
 
     Args:
-        num_heads: 注意力头的数量
-        dim_head: 每个注意力头的维度
-        dim_feedforward: 前馈网络的隐藏层维度
-        dropout: Dropout概率，用于正则化
-        device: 模型运行的设备（CPU/GPU）
+        temperature: 控制对齐尖锐程度的温度参数，值越小对齐越尖锐（接近one-hot），值越大对齐越平滑
 
     Inputs:
-        target: 目标序列张量，形状为 [batch_size, seq_len, dim_model]
-        memory: 记忆序列（编码器输出），形状为 [batch_size, mem_len, dim_model]
-        target_padding_mask: 目标序列填充掩码，形状为 [batch_size, seq_len]
-        memory_padding_mask: 记忆序列填充掩码，形状为 [batch_size, mem_len]
-        kv_cache: 上一时间步的键值缓存
+        features: 输入特征序列 [batch_size, seq_len, feature_dim]
+        durations: 每个特征的持续时间 [batch_size, seq_len]
 
     Outputs:
-        output: 解码层输出张量，形状同输入target
-        new_kv_cache: 更新后的键值缓存，用于后续时间步
+        扩展后的特征序列 [batch_size, total_frames, feature_dim]
     """
 
-    def __init__(
-        self,
-        num_heads: int,
-        dim_head: int,
-        dim_feedforward: int,
-        dropout: float = 0.,
-        device: Optional[torch.device] = None
-    ):
+    def __init__(self, temperature=0.1):
         super().__init__()
-        dim_model = dim_head * num_heads  # 计算模型总维度
+        self.temperature = temperature
+        
+    def forward(self, features, durations):
+        # 计算每个时间步的累积持续时间 [batch_size, seq_len]
+        cum_durations = torch.cumsum(durations, dim=1)
 
-        # 初始化多头注意力模块
-        self.self_attention = MultiheadAttention(
-            dim_head=dim_head,
-            num_heads=num_heads,
-            dropout=dropout,
-            device=device
-        )
-        self.cross_attention = MultiheadAttention(
-            dim_head=dim_head,
-            num_heads=num_heads,
-            dropout=dropout,
-            device=device
-        )
+        # 计算最大持续时间并确定总帧数（向上取整）
+        total_frames = int(torch.ceil(cum_durations[:, -1].max()).item())
 
-        # 前馈神经网络定义（线性层+GELU激活）
-        self.feedforward = nn.Sequential(
-            nn.Linear(dim_model, dim_feedforward, device=device),
-            nn.GELU(approximate="tanh"),  # 使用tanh近似的GELU
-            nn.Linear(dim_feedforward, dim_model, device=device)
-        )
+        # 创建帧中心位置网格 [1, total_frames]
+        # 使用0.5偏移使帧中心对齐
+        frame_centers = torch.arange(total_frames, device=features.device).float()[None] + 0.5
 
-        # 初始化归一化层
-        self.self_attention_norm = ScaleNorm(dim_model, device=device)
-        self.cross_attention_norm = ScaleNorm(dim_model, device=device)
-        self.feedforward_norm = ScaleNorm(dim_model, device=device)
+        # 计算每帧与各特征位置的距离 [batch_size, total_frames, seq_len]
+        # 使用广播机制自动扩展维度
+        frame_distances = frame_centers[:, :, None] - cum_durations[:, None, :]
 
-        # 初始化可学习缩放因子
-        self.self_attention_scale = nn.Parameter(torch.zeros(1, device=device))
-        self.cross_attention_scale = nn.Parameter(torch.zeros(1, device=device))
-        self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
+        # 计算归一化权重 [batch_size, total_frames, seq_len]
+        # 使用温度参数控制分布形状
+        weights = torch.softmax(-torch.abs(frame_distances) / self.temperature, dim=-1)
 
-        # 共享的Dropout层
-        self.dropout = nn.Dropout(dropout)
-
-        # 使用Xavier均匀分布初始化前馈网络权重
-        for module in self.feedforward:
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-
-    @overload
-    def forward(
-        self,
-        target: torch.Tensor,
-        memory: torch.Tensor,
-        target_padding_mask: Optional[torch.Tensor],
-        memory_padding_mask: Optional[torch.Tensor],
-        kv_cache: None,
-    ) -> tuple[torch.Tensor, LayerKVCache]:
-        ...
-
-    @overload
-    def forward(
-        self,
-        target: torch.Tensor,
-        memory: None,
-        target_padding_mask: None,
-        memory_padding_mask: None,
-        kv_cache: LayerKVCache,
-    ) -> tuple[torch.Tensor, LayerKVCache]:
-        ...
-
-    def forward(
-        self,
-        target,
-        memory,
-        target_padding_mask=None,
-        memory_padding_mask=None,
-        kv_cache=None,
-    ):
-        # 获取位置偏移量
-        rope_offset = kv_cache[0][0].size(2) if kv_cache else 0
-
-        # 自注意力，应用缩放因子和残差连接
-        normalized_target = self.self_attention_norm(target)
-        attn_output, self_attn_kv_cache = self.self_attention(
-            normalized_target, normalized_target,
-            kv_cache=kv_cache[0] if kv_cache else None,
-            padding_mask=target_padding_mask,
-            queries_rope_offset=rope_offset,
-            keys_rope_offset=rope_offset,
-            is_causal=True
-        )
-        x = target + self.dropout(attn_output * self.self_attention_scale)
-
-        # 交叉注意力
-        attn_output, cross_attn_kv_cache = self.cross_attention(
-            self.cross_attention_norm(x),
-            memory,
-            kv_cache=kv_cache[1] if kv_cache else None,
-            padding_mask=memory_padding_mask,
-            queries_rope_offset=rope_offset
-        )
-        x = x + self.dropout(attn_output * self.cross_attention_scale)
-
-        # 前馈网络
-        ff_output = self.feedforward(self.feedforward_norm(x))
-        x = x + self.dropout(ff_output * self.feedforward_scale)
-
-        return x, (self_attn_kv_cache, cross_attn_kv_cache)
+        # 通过加权求和扩展特征 [batch_size, total_frames, feature_dim]
+        expanded_features = torch.einsum("btl,bld->btd", weights, features)
+        return expanded_features
 
 
-class TkTTSConfig(NamedTuple):
+class FastSpeech2Config(NamedTuple):
     """
-    TkTTS 的配置。
+    FastSpeech2 的配置类，包含模型的超参数设置。
 
     Attributes:
         vocab_size: 词汇表大小。
-        fft_length: FFT窗口长度。
-        num_heads: 注意力头数量。
+        num_tags: 标签数量，用于控制生成。
+        num_mels: 梅尔频谱的维度。
+        num_heads: 注意力头的数量。
         dim_head: 每个注意力头的维度。
         dim_feedforward: 前馈网络的隐藏层维度。
-        num_layers: Transformer En/Decoder 层的数量。
+        fft_conv1_kernel_size: 第一个 FFT 卷积层的卷积核大小。
+        fft_conv2_kernel_size: 第二个 FFT 卷积层的卷积核大小。
+        predictor_kernel_size: 预测器的卷积核大小。
+        variance_bins: 变异性预测的 bins 数量。
+        num_encoder_layers: 编码器层的数量。
+        num_decoder_layers: 解码器层的数量。
     """
     vocab_size: int
-    fft_length: int
+    num_tags: int
+    num_mels: int
     num_heads: int
     dim_head: int
     dim_feedforward: int
-    num_layers: int
+    fft_conv1_kernel_size: int
+    fft_conv2_kernel_size: int
+    predictor_kernel_size: int
+    variance_bins: int
+    num_encoder_layers: int
+    num_decoder_layers: int
 
 
-class TkTTS(nn.Module):
+class FastSpeech2(nn.Module):
     """
-    基于Transformer的文本到语音(TTS)模型，将文本转换为组合频谱图
+    FastSpeech2 模型实现，基于 FastSpeech2Config 配置类。
+    该模型包含词嵌入、标签嵌入、编码器、解码器、预测器和梅尔频谱预测器等组件。
 
-    工作流程：
-    1. 将输入文本序列通过嵌入层转换为向量表示
-    2. 使用多层编码器处理文本序列，提取高级特征
-    3. 使用多层解码器处理目标序列（组合频谱），结合编码器输出
-    4. 通过线性层预测组合频谱图和停止标志
-    5. 支持自回归生成模式，使用KV缓存加速推理
+    工作流程如下：
+        1. 输入文本通过词嵌入层转换为嵌入表示。
+        2. 如果提供了标签，则将标签嵌入并与文本嵌入相加。
+        3. 嵌入表示通过编码器进行处理，生成上下文表示。
+        4. 使用预测器预测音高、能量和时长。
+        5. 将音高和能量作为附加特征添加到上下文表示中。
+        6. 使用长度调节器调整序列长度。
+        7. 解码器处理调整后的表示，生成梅尔频谱预测。
+
+    Args:
+        config: FastSpeech2Config 配置对象，包含模型的超参数设置。
+        dropout: Dropout 概率，用于防止过拟合。
+        device: 可选的设备参数，用于指定模型运行的设备。
 
     Inputs:
-        source: 源文本序列的整数张量
-        target: 目标组合频谱序列的张量
-        source_padding_mask: 源序列的填充掩码
-        target_padding_mask: 目标序列的填充掩码
-        kv_cache: 自回归生成时的键值缓存
+        text: 输入文本的张量，形状为 (batch_size, seq_len)。
+        positive_prompt: 可选的标签列表，每个标签是一个整数列表。len(positive_prompt) 应等于 batch_size，每个标签列表的长度可以不同。
+        negative_prompt: 可选的负面标签列表，格式同 positive_prompt。
+        text_padding_mask: 可选的文本填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False。
+        pitch_target: 可选的音高目标张量，形状为 (batch_size, seq_len)。
+        energy_target: 可选的能量目标张量，形状为 (batch_size, seq_len)。
 
     Outputs:
-        output:
-            audio_prediction: 预测的组合频谱，形状 (batch_size, tgt_len, (fft_length // 2 + 1) * 3)
-            stop_prediction: 预测的停止标志，形状 (batch_size, tgt_len)
-        layers_kv_cache: 每层解码器的键值缓存（用于自回归生成）
-
-    Examples:
-        >>> model = TkTTS(config)
-        >>> source = torch.randint(0, vocab_size, (batch_size, src_len))
-        >>> target = torch.randn(batch_size, tgt_len, (fft_length // 2 + 1) * 3)
-        >>> source_mask = torch.ones(batch_size, src_len).bool()
-        >>> target_mask = torch.ones(batch_size, tgt_len).bool()
-        >>> (audio_pred, stop_pred), _ = model(source, target, source_mask, target_mask)
+        返回一个元组，包含梅尔频谱预测、时长预测、音高预测和能量预测，形状分别为：
+        - mel_prediction: (batch_size, seq_len, num_mels)
+        - duration_prediction: (batch_size, seq_len)
+        - pitch_prediction: (batch_size, seq_len)
+        - energy_prediction: (batch_size, seq_len)
     """
 
-    def __init__(
-        self,
-        config: TkTTSConfig,
-        dropout: float = 0.,
-        device: Optional[torch.device] = None
-    ):
+    def __init__(self, config: FastSpeech2Config, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
-        self.dim_model = config.dim_head * config.num_heads  # 模型总维度
-        dim_audio = config.fft_length * 3 // 2 + 3  # 输入/输出维度
+        self.dim_model = config.dim_head * config.num_heads  # 总模型维度
+        self.variance_bins = config.variance_bins
 
-        # 将 token 映射为向量
+        # 词嵌入
         self.embedding = nn.Embedding(config.vocab_size, self.dim_model, device=device)
+        self.tag_embedding = nn.Embedding(config.num_tags, self.dim_model, device=device)
 
-        # 将组合谱图映射为向量
-        self.audio_projection = nn.Linear(dim_audio, self.dim_model)
+        # 编码器、解码器
+        layer = FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, dropout, device)
+        self.encoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_encoder_layers ))
+        self.decoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_decoder_layers ))
 
-        # 堆叠多个 TkTTS En/Decoder Layer 层
-        layer = TransformerEncoderLayer(config.num_heads, config.dim_head, config.dim_feedforward, dropout=dropout, device=device)
-        self.encoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_layers))
-        layer = TransformerDecoderLayer(config.num_heads, config.dim_head, config.dim_feedforward, dropout=dropout, device=device)
-        self.decoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_layers))
+        # 预测器
+        self.duration_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
+        self.pitch_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
+        self.energy_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
 
-        # 输出组合谱图和结束标志
-        self.audio_predictor = nn.Linear(self.dim_model, dim_audio, device=device)
-        self.stop_predictor = nn.Linear(self.dim_model, 1, device=device)
+        # 音高和能量嵌入
+        self.pitch_embedding = nn.Embedding(config.variance_bins, self.dim_model, device=device)
+        self.energy_embedding = nn.Embedding(config.variance_bins, self.dim_model, device=device)
 
-        # 初始化权重
-        torch.nn.init.xavier_uniform_(self.embedding.weight)
-        for module in [self.audio_projection, self.audio_predictor, self.stop_predictor]:
-            torch.nn.init.xavier_uniform_(module.weight)
-            torch.nn.init.zeros_(module.bias)
+        # 长度调节器
+        self.length_regulator = DifferentiableLengthRegulator()
 
-    @overload
-    def forward(
-        self,
-        source: torch.Tensor,
-        target: torch.Tensor,
-        source_padding_mask: Optional[torch.Tensor],
-        target_padding_mask: Optional[torch.Tensor],
-        kv_cache: None
-    ) -> tuple[tuple[torch.Tensor, torch.Tensor], NetKVCache]:
-        ...
-
-    @overload
-    def forward(
-        self,
-        source: None,
-        target: torch.Tensor,
-        source_padding_mask: None,
-        target_padding_mask: None,
-        kv_cache: NetKVCache
-    ) -> tuple[tuple[torch.Tensor, torch.Tensor], NetKVCache]:
-        ...
+        # 梅尔频谱预测器
+        self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
 
     def forward(
         self,
-        source,
-        target,
-        source_padding_mask=None,
-        target_padding_mask=None,
-        kv_cache=None
-    ):
-        if source is None:
-            memory = None
+        text: torch.Tensor,
+        positive_prompt: Optional[list[list[int]]] = None,
+        negative_prompt: Optional[list[list[int]]] = None,
+        text_padding_mask: Optional[torch.BoolTensor] = None,
+        pitch_target: Optional[torch.Tensor] = None,
+        energy_target: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # 如果没有提供填充掩码，则创建一个全为 False 的掩码
+        if text_padding_mask is None:
+            text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
+
+        # 词嵌入
+        x = self.embedding(text) * math.sqrt(self.dim_model)
+
+        # 标签嵌入
+        if positive_prompt:
+            tag_batch = pad_sequence([torch.tensor(t, dtype=int) for t in positive_prompt], batch_first=True, padding_value=0)
+            tag_mask = tag_batch == 0
+
+            # 将标签嵌入添加到输入嵌入中
+            x = x + (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
+        if negative_prompt:
+            tag_batch = pad_sequence([torch.tensor(t, dtype=int) for t in negative_prompt], batch_first=True, padding_value=0)
+            tag_mask = tag_batch == 0
+
+            # 从输入嵌入中减去负面标签嵌入
+            x = x - (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
+
+        # 编码器
+        for layer in self.encoder:
+            x = layer(x, text_padding_mask)
+
+        # 预测时长
+        duration_prediction = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
+
+        # 防止时长为零
+        duration_prediction = duration_prediction.clamp(min=0)
+
+        # 长度调节
+        x = self.length_regulator(x, duration_prediction)  # [batch_size, dim_model, audio_len]
+
+        # 获取截断长度，因为多余的序列没有目标值，无法训练
+        if pitch_target is None:
+            truncated_len = x.size(1)
         else:
-            # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
-            memory = self.embedding(source) * math.sqrt(self.dim_model)
+            truncated_len = min(x.size(1), pitch_target.size(1))
+        x = x[:, :truncated_len]
 
-            # 通过编码器
-            for layer in self.encoder:
-                memory = layer(memory, padding_mask=source_padding_mask)
+        # 生成音频填充掩码
+        audio_padding_mask = duration_prediction.ceil().sum(dim=1).unsqueeze(1) <= torch.arange(x.size(1), device=x.device).unsqueeze(0)  # [batch_size, audio_len]
 
-        # 将组合谱图映射为向量
-        target = self.audio_projection(target)
+        # 预测音高和能量
+        pitch_prediction = self.pitch_predictor(x, audio_padding_mask)  # [batch_size, text_len]
+        energy_prediction = self.energy_predictor(x, audio_padding_mask)  # [batch_size, audio_len]
 
-        # 通过解码器
-        layers_kv_cache = []
-        for layer_idx, layer in enumerate(self.decoder):
-            target, layer_kv_cache = layer(
-                target,
-                memory,
-                target_padding_mask=target_padding_mask,
-                memory_padding_mask=source_padding_mask,
-                kv_cache=kv_cache[layer_idx] if kv_cache else None,
-            )
-            layers_kv_cache.append(layer_kv_cache)
+        # 使用目标值替代预测值（如果提供）
+        # 这是为了在训练时使用真实值进行长度调节（即教师强制），然后返回预测值以进行损失计算
+        pitch = pitch_prediction if pitch_target is None else pitch_target[:, :truncated_len]
+        energy = energy_prediction if energy_target is None else energy_target[:, :truncated_len]
 
-        # 输出组合频谱和结束标志
-        audio_prediction = self.audio_predictor(target)
-        stop_prediction = F.sigmoid(self.stop_predictor(target)[..., 0])
+        # 确保音高、能量为非负值且整数
+        pitch = pitch.to(dtype=int).clamp(min=0, max=1) * (self.variance_bins - 1)
+        energy = energy.to(dtype=int).clamp(min=0, max=1) * (self.variance_bins - 1)
 
-        return (audio_prediction, stop_prediction), layers_kv_cache
+        # 将音高和能量作为附加特征添加到编码器输出中
+        x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
+
+        # 解码器
+        for layer in self.decoder:
+            x = layer(x, audio_padding_mask)
+
+        # 梅尔频谱预测
+        mel_prediction = self.mel_predictor(x)  # [batch_size, audio_len, num_mels]
+        return mel_prediction, duration_prediction, pitch_prediction, energy_prediction

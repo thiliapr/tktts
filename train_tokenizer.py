@@ -18,7 +18,7 @@ from transformers import PreTrainedTokenizerFast
 from utils.tookit import parallel_map
 
 
-def train_tokenizer(model_data_samples: list[str], vocab_size: int, min_frequency: int, tags: list[str]):
+def train_tokenizer(model_data_samples: list[str], vocab_size: int, min_frequency: int):
     """
     训练专门用于处理模型数据的 tokenizer
 
@@ -35,7 +35,7 @@ def train_tokenizer(model_data_samples: list[str], vocab_size: int, min_frequenc
 
     # 准备训练器配置
     trainer = trainers.BpeTrainer(
-        special_tokens=["[UNK]", *[f"[{tag}]" for tag in tags]],
+        special_tokens=["[UNK]"],
         vocab_size=vocab_size,
         min_frequency=min_frequency,
         show_progress=False
@@ -53,7 +53,7 @@ def train_tokenizer(model_data_samples: list[str], vocab_size: int, min_frequenc
     return wrapped_tokenizer
 
 
-def get_samples_worker(rank: int, metadata_files: list[pathlib.Path]) -> tuple[list[str], set[str]]:
+def get_samples_worker(rank: int, metadata_files: list[pathlib.Path]) -> list[str]:
     """
     从元数据中提取标签和文本
 
@@ -62,10 +62,9 @@ def get_samples_worker(rank: int, metadata_files: list[pathlib.Path]) -> tuple[l
         metadata_files: 元数据文件的路径列表
 
     Returns:
-        包含文本列表和标签集合的元组列表
+        文本列表
     """
-    # 初始化标签集合、文本列表
-    tags = set()
+    # 初始化文本列表
     texts = []
 
     # 遍历每个元数据文件
@@ -77,23 +76,19 @@ def get_samples_worker(rank: int, metadata_files: list[pathlib.Path]) -> tuple[l
         # 读取元数据
         metadata = orjson.loads(metadata_file.read_bytes())
 
-        # 跳过没有包括必要键的元数据
-        if "tags" not in metadata or "text" not in metadata:
-            continue
-
         # 添加标签和文本
-        tags |= set(metadata["tags"])
         texts.append(metadata["text"])
 
-    return texts, tags
+    return texts
 
 
-def get_samples(metadata_dirs: list[pathlib.Path], num_workers: int) -> tuple[list[str], set[str]]:
+def get_samples(metadata_dirs: list[pathlib.Path], num_samples: int, num_workers: int) -> tuple[list[str], set[str]]:
     """
     从指定目录中提取元数据的标签和文本
 
     Args:
         dirs: 包含 JSON 元数据文件的目录列表
+        num_samples: 随机抽选多少个样本
         num_workers: 执行任务的进程数
 
     Returns:
@@ -107,14 +102,18 @@ def get_samples(metadata_dirs: list[pathlib.Path], num_workers: int) -> tuple[li
         if metadata_file.suffix.lower() == ".json"
     ]
 
+    # 如果样本数量超过指定数量，则随机抽样
+    if len(metadata_files) > num_samples:
+        print(f"样本数量超过 {num_samples}，随机抽样...")
+        metadata_files = random.sample(metadata_files, num_samples)
+
     # 处理所有样本文件
     results = parallel_map(get_samples_worker, [(worker_id, metadata_files[worker_id::num_workers]) for worker_id in range(num_workers)])
 
-    # 提取标签和训练文本
-    tags = {tag for _, worker_tags in results for tag in worker_tags}
-    samples = [text for worker_texts, _ in results for text in worker_texts]
+    # 提取文本
+    samples = [text for worker_texts in results for text in worker_texts]
 
-    return samples, tags
+    return samples
 
 
 def validate(samples: list[str], tokenizer: PreTrainedTokenizerFast) -> dict[str, Union[int, float]]:
@@ -197,20 +196,14 @@ def main(args: argparse.Namespace):
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 处理所有训练样本文件
-    train_samples, tags = get_samples(args.train_samples, args.num_workers)
-
-    # 如果训练样本数量超过指定数量，则随机抽样
-    if len(train_samples) > args.train_samples_count:
-        print(f"训练样本数量超过 {args.train_samples_count}，随机抽样...")
-        train_samples = random.sample(train_samples, args.train_samples_count)
+    train_samples = get_samples(args.train_samples, args.train_samples_count, args.num_workers)
 
     # 训练分词器
     print("开始训练分词器...")
     tokenizer = train_tokenizer(
         train_samples,
         vocab_size=args.vocab_size,
-        min_frequency=args.min_frequency,
-        tags=tags
+        min_frequency=args.min_frequency
     )
 
     # 保存分词器
@@ -232,12 +225,7 @@ def main(args: argparse.Namespace):
         print("\n验证集评估:")
 
         # 处理所有验证样本文件
-        valid_samples, _ = get_samples(args.valid_samples, args.num_workers)
-
-        # 如果验证样本数量超过指定数量，则随机抽样
-        if len(valid_samples) > args.valid_samples_count:
-            print(f"验证样本数量超过 {args.valid_samples_count}，随机抽样...")
-            valid_samples = random.sample(valid_samples, args.valid_samples_count)
+        valid_samples = get_samples(args.valid_samples, args.valid_samples_count, args.num_workers)
 
         # 评估验证集效果
         valid_metrics = validate(valid_samples, tokenizer)

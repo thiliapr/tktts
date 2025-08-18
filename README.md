@@ -34,24 +34,69 @@ pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu1
 ```bash
 wget https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2  # https://keithito.com/LJ-Speech-Dataset/
 ```
-然后写一个脚本，将数据集转化为这种格式（自食其力，或者发issue叫我添加功能）
-```json
-[{"tags":["character:白上フブキ","sex:female","age:teenager"],"text":"Hi Friends!"}]
+然后写一个脚本，将数据集转化为这种结构：对于每一个音频，都应该有一个对应的元数据文件
+```plaintext
+dataset
++---select_oblige
+|   \---kuk
+|           fem_kuk_00001.ogg
+|           fem_kuk_00001.ogg.json
+|
+\---senren_banka
+        akh108_001.ogg
+        akh108_001.ogg.json
 ```
+而元数据内容应类似这样
+```json
+{
+    "text":"んー……文化部総括としての報告は、大してない。\n活動報告は同じく資料にまとめてあるから、それで",
+    "positive_prompt":["source:セレクトオブリージュ","sex:female","age:teenager","voice_actor:相模恋","character:夜刀くくる"],
+    "negative_prompt":["voice_actor:秋野花","character:鞍馬小春","character:獅童龍司","source:千恋＊万花","sex:male","voice_actor:風音","character:常陸茉子","character:コーチ","voice_actor:桜川未央","age:adult","voice_actor:由嘉鈍","voice_actor:七種結花","voice_actor:奏雨","voice_actor:沢澤砂羽","character:駒川みづは","voice_actor:飴川紫乃","character:星継銀音","character:ファイブ","voice_actor:椨もんじゃ","voice_actor:真宮ゆず","character:Ｋ子","character:一色奏命","character:中条比奈実","voice_actor:佐藤みかん","character:大屋汐莉","character:トウリ","character:猪谷心子","character:成宮帝雄","character:朝武秋穂","voice_actor:小鳥居夕花","voice_actor:天知遥","character:バアさん","age:old","voice_actor:北大路ゆき","character:モンステラ","voice_actor:北見六花","voice_actor:木住葵","character:朝武安晴","character:ムラサメ","voice_actor:ナオト†サンクチュアリ","character:北条花","character:葦華真智","voice_actor:碓氷珊瑚","character:レナ·リヒテナウアー","voice_actor:山崎高","character:Ｕ子","voice_actor:ちとせ杏","source:アイコトバ -Silver Snow Sister-","character:西山冴希","voice_actor:白砂菓夏海","character:一ノ瀬七","age:children","character:北条空","character:蓼科イヴ","voice_actor:東シヅ","character:朝武芳乃","character:鞍馬玄十郎","voice_actor:御苑生メイ","character:鞍馬廉太郎","voice_actor:遥そら"]
+}
+```
+
 
 #### 从 Artemis 游戏中提取数据集
 1. 使用[GARbro](https://github.com/crskycode/GARbro)从游戏目录的`xxx.pfs`文件提取出`sound/vo`和`script`文件夹，分别保存到`/path/to/game/sound/vo`和`/path/to/game/script`
 2. 运行`python extract_artemis.py /path/to/game/script /path/to/game/sound/vo /path/to/artemis_pre_dataset`，它会输出一个角色ID对应的角色名次数
 3. 仿照`examples/select_oblige_c2t.json`和`examples/aikotoba_sss_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/artemis_c2t.json`
-4. 运行`python convert_artemis_to_dataset.py /path/to/artemis_pre_dataset /path/to/artemis_c2t.json /path/to/artemis_dataset -t source:<游戏名> -t <其他你想在所有对话加上的标签>`
+4. 运行`python convert_artemis_to_dataset.py /path/to/artemis_pre_dataset /path/to/artemis_c2t.json /path/to/artemis_dataset -p source:<游戏名> -p <其他你想在所有对话加上的标签> -n <你想在所有对话加上的负面标签>`
 5. 你的数据集应该已经在`/path/to/artemis_dataset`了
 
 #### 从 Kirikiri Z 游戏中提取数据集
 1. 使用[GARbro](https://github.com/crskycode/GARbro)分别从游戏目录的`data.xp3`文件和`voice.xp3`提取出`scn`和根目录文件夹，分别保存到`/path/to/game/script`和`/path/to/game/voice`
 2. 运行`python extract_kirikiriz.py /path/to/game/script /path/to/game/voice /path/to/kirikiriz_pre_dataset`，它会输出所有对话出现的角色名
 3. 仿照`examples/senren_banka_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/kirikiriz_c2t.json`
-4. 运行`python convert_kirikiriz_to_dataset.py /path/to/kirikiriz_pre_dataset /path/to/kirikiriz_c2t.json /path/to/kirikiriz_dataset -t source:<游戏名> -t <其他你想在所有对话加上的标签>`
+4. 运行`python convert_kirikiriz_to_dataset.py /path/to/kirikiriz_pre_dataset /path/to/kirikiriz_c2t.json /path/to/kirikiriz_dataset -p source:<游戏名> -p <其他你想在所有对话加上的标签> -n <你想在所有对话加上的负面标签>`
 5. 你的数据集应该已经在`/path/to/kirikiriz_dataset`了
+
+### 可选: 对数据集进行提示词增强
+我们都知道，有一些标签是不可能同时存在的，比如`sex:male`和`sex:female`就不可能同时出现在一个正面提示里，所以我们可以定义一堆标签互斥组，类似这样
+```python
+[
+    {"sex:male", "sex:female"},
+    {"age:children", "age:teenager", "age:adult", "age:old"},
+    {"character:白上フブキ", "character:夏色まつり"}  # 举这两个例子是因为我喜欢看
+]
+```
+对于一个音频的元数据，我们遍历每一个标签互斥组（类型：集合），然后检测元数据的正面标签是否包含且仅包含了这个标签互斥组中的一个标签，比如
+```python
+positive_prompt = {"age:children"}
+negative_prompt: set[str]
+groups = [{"age:children", "age:teenager", "age:adult", "age:old"}, ...]
+for group in groups:
+    if len(intersection := positive_prompt & group) == 1:  # 为什么不是只要检测到包含就全部加入负面提示呢？因为可能有些用户想要同时指定两个冲突的标签；鬼知道他们是怎么想的
+        negative_prompt.update(group - intersection)  # 将该组其余所有的互斥标签加入负面提示
+```
+我写了一个脚本来节省自己造轮子的麻烦，你可以通过运行
+```bash
+python augment_prompt_with_exclusion.py /path/to/dataset /path/to/dataset /path/to/mutually_exclusive_groups.json
+```
+来实现提示词增强
+> ![TIP]
+> 参数的两个`/path/to/dataset`是为了省提示增强后需要手动将改写后的`post_dataset`复制回`/path/to/dataset`的麻烦
+> 如果你想，你也可以指定一个`/path/to/dataset_pre`和`/path/to/dataset_post`，但这麻烦且毫无意义
+> 此处`/path/to/mutually_exclusive_groups.json`内容请参考`examples/mutually_exclusive_groups.json`
 
 ### 训练分词器
 ```bash
@@ -60,7 +105,8 @@ python train_tokenizer.py /path/to/ckpt -t /path/to/train_dataset -v /path/to/va
 
 ### 初始化检查点
 ```bash
-python init_checkpoint.py /path/to/ckpt
+python list_tags_from_datasets.py /path/to/dataset -o /path/to/tags.txt
+python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
 ```
 
 ### 训练模型
@@ -69,57 +115,16 @@ python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/train_dataset -v /p
 ```
 将`<num_epochs>`替换为实际的你想训练的轮数  
 > [!TIP]
-> 你可以在训练途中或训练后运行`python show_scales.py /path/to/ckpt`来看看每层的缩放因子，按数据流向排序
+> 你可以在训练后运行`python show_scales.py /path/to/ckpt`来看看每层的缩放因子，按数据流向排序
 
 ### 生成
 ```bash
-python list_tags.py  # 列出所有标签
-python generate.py ckpt output.wav "[character:夏色まつり][sex:female][age:teenager]ホロライブ所属のバーチャルyoutuber、夏色まつりだよっ！！"  # 生成语音（格式: `[标签1][标签2]...[标签N]文本`）
+python list_tags_from_ckpt.py /path/to/ckpt  # 列出所有标签
+python generate.py /path/to/ckpt output.wav ホロライブ所属のバーチャルyoutuber、夏色まつりだよっ！！ -p character:夏色まつり -p source:youtube -p sex:female -p age:teenager -n sex:male
 ```
 
 ### 注意事项
 - 请在命令行输入`python3 file.py --help`获得帮助
-
-## 模型结构
-以下以纯文本形式展示了模型的结构，省略了 padding_mask 和 kv_cache 部分。之所以是纯文本，是因为我不会画图ww
-```plaintext
-Module Linear(x), GeLU(x), ScaleNorm(x), MultiheadAttentionWithRoPE(q, kv), Sequential(x);
-Module EncoderLayer:
-    init:
-        .attn_scale = .ff_scale=0
-        .attn: MultiheadAttentionWithRoPE
-        .ff = Sequential(Linear, GeLU, Linear)
-        .attn_norm, .ff_norm: ScaleNorm
-    forward(x):
-        norm_x = attn_norm(x)
-        x = x + .attn(norm_x, norm_x) * .attn_scale
-        x = x + .ff(.ff_norm(x)) * .ff_scale
-Module DecoderLayer:
-    init:
-        .sa_scale = .ca_scale = .ff_scale=0
-        .sa, .ca: MultiheadAttentionWithRoPE
-        .ff = Sequential(Linear, GeLU, Linear)
-        .sa_norm, .ca_norm, .ff_norm: ScaleNorm
-    forward(target, memory):
-        norm_target = sa_norm(target)
-        x = target + .sa(norm_target, norm_target, is_causal=True) * .sa_scale
-        x = x + .ca(.ca_norm(x), memory) * .ca_scale
-        x = x + .ff(.ff_norm(x)) * .ff_scale
-Module TkTTS:
-    init:
-        .embedding: Embedding
-        .audio_proj, .audio_pred, .stop_pred: Linear
-        .encoder = [EncoderLayer for _ in range(N)]
-        .decoder = [DecoderLayer for _ in range(N)]
-    forward(source, target):
-        memory = .embedding(source)
-        target = .audio_proj(target)
-        for layer in .encoder:
-            memory = layer(memory)
-        for layer in .decoder:
-            target = layer(target, memory)
-        return .audio_pred(target), .stop_pred(target)[..., 0]
-```
 
 ## 文档
 文档是不可能写的，这辈子都不可能写的。经验表明，写了文档只会变成“代码一天一天改，文档一年不会动”的局面，反而误导人。
