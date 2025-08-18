@@ -32,7 +32,7 @@ def main(args: argparse.Namespace):
     else:
         output_file = pathlib.Path(args.output_file)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_func = lambda x: output_file.write_text(x + "\n", encoding="utf-8")
+        output_func = lambda x: output_file.write_text(x, encoding="utf-8")
 
     # 加载检查点
     _, _, _, _, tag_label_encoder = load_checkpoint(args.ckpt_path)
@@ -42,8 +42,7 @@ def main(args: argparse.Namespace):
     tags.remove("[PAD]")  # 移除填充标签
 
     # 打印标签列表
-    for tag in tags:
-        output_func(tag)
+    output_func("\n".join(tags))
 
 
 if __name__ == "__main__":
