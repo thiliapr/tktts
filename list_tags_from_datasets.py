@@ -55,8 +55,7 @@ def main(args: argparse.Namespace):
     tags = sorted(tags)
 
     # 打印标签
-    for tag in tags:
-        output_func(tag)
+    output_func("\n".join(tags))
 
 
 if __name__ == "__main__":
