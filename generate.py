@@ -68,9 +68,9 @@ def main(args: argparse.Namespace):
 
     # 打印有效的正面和负面提示词
     if positive_prompt is not None:
-        print(f"正面提示词: {[tag_label_encoder.vocab[tag] for tag in positive_prompt]}")
+        print(f"正面提示词: {[tag_label_encoder.id_to_tag[tag] for tag in positive_prompt]}")
     if negative_prompt is not None:
-        print(f"负面提示词: {[tag_label_encoder.vocab[tag] for tag in negative_prompt]}")
+        print(f"负面提示词: {[tag_label_encoder.id_to_tag[tag] for tag in negative_prompt]}")
 
     # 生成音频
     mel_prediction, _, _, _ = model(text, positive_prompt, negative_prompt)  # [1, seq_len, n_mels]
