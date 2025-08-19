@@ -78,6 +78,7 @@ class TkTTSDataset(Dataset):
 
         # 并行执行任务
         num_workers = max(min(os.cpu_count(), len(metadata) // 10), 1)  # 一个进程至少要获取 10 个音频元数据，并且至少有一个进程执行任务
+        num_workers = 1
         results = parallel_map(self._worker_load_data, [
             (rank, metadata[rank::num_workers], tokenizer, tag_label_encoder, sample_rate, fft_length, frame_length, win_length, hop_length, num_mels)
             for rank in range(num_workers)
