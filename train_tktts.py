@@ -133,7 +133,7 @@ class TkTTSDataset(Dataset):
             fmax = librosa.note_to_hz("C7")  # 最高频率
 
             # 最高频率
-            f0, voiced_flag, _ = librosa.yin(
+            f0 = librosa.yin(
                 audio,
                 fmin=fmin,
                 fmax=fmax,
@@ -143,8 +143,8 @@ class TkTTSDataset(Dataset):
             )
 
             # 对数变换（避免取log(0)）
-            log_f0 = np.zeros_like(f0)
-            log_f0[voiced_flag] = np.log(f0[voiced_flag])
+            log_f0 = np.full_like(f0, np.finfo(f0.dtype).eps, dtype=f0.dtype)
+            log_f0 = np.log(f0)
 
             # 归一化到 [0, 1]
             log_min = np.log(fmin)
