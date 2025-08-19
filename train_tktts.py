@@ -451,7 +451,7 @@ def train(
         padded_text, positive_prompt, negative_prompt, padded_audio, padded_pitch, padded_energy, text_length, audio_length = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
         # 准备文本掩码
-        text_padding_mask = torch.arange(padded_text.size(1)).unsqueeze(0) >= text_length.unsqueeze(1)
+        text_padding_mask = torch.arange(padded_text.size(1), device=padded_text.device).unsqueeze(0) >= text_length.unsqueeze(1)
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
@@ -497,7 +497,7 @@ def validate(
         padded_text, positive_prompt, negative_prompt, padded_audio, padded_pitch, padded_energy, text_length, audio_length = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
         # 准备文本掩码
-        text_padding_mask = torch.arange(padded_text.size(1)).unsqueeze(0) >= text_length.unsqueeze(1)
+        text_padding_mask = torch.arange(padded_text.size(1), device=padded_text.device).unsqueeze(0) >= text_length.unsqueeze(1)
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
