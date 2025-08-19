@@ -642,13 +642,13 @@ def main(args: argparse.Namespace):
     # 加载训练数据集
     train_dataset = TkTTSDataset(args.train_dataset, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["pyin_frame_length"], extra_config["hop_length"], extra_config["win_length"], model_config.num_mels)
     train_sampler = TkTTSDatasetSampler(train_dataset, args.train_max_batch_tokens)
-    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=os.cpu_count())
+    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
         val_dataset = TkTTSDataset(args.val_dataset, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["pyin_frame_length"], extra_config["hop_length"], extra_config["win_length"], model_config.num_mels)
         val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
-        val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=os.cpu_count())
+        val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 开始训练
     for epoch in range(args.num_epochs):
