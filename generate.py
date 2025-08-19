@@ -6,6 +6,7 @@
 import os
 import pathlib
 import argparse
+from turtle import forward
 from typing import Optional
 import torch
 import librosa
@@ -71,6 +72,10 @@ def main(args: argparse.Namespace):
         print(f"正面提示词: {[tag_label_encoder.id_to_tag[tag] for tag in positive_prompt]}")
     if negative_prompt is not None:
         print(f"负面提示词: {[tag_label_encoder.id_to_tag[tag] for tag in negative_prompt]}")
+
+    # 给提示词加上批次维度
+    positive_prompt = [positive_prompt] if positive_prompt else None
+    negative_prompt = [negative_prompt] if negative_prompt else None
 
     # 生成音频
     mel_prediction, _, _, _ = model(text, positive_prompt, negative_prompt)  # [1, seq_len, n_mels]
