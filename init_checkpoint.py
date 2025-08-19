@@ -80,6 +80,9 @@ def main(args: argparse.Namespace):
     # 检查 FFT 窗口长度是否为偶数
     if args.fft_length % 2 == 1:
         raise RuntimeError("FFT 窗口长度必须为偶数。")
+    # 检查注意力头的维度是否为偶数
+    if args.dim_head % 2 == 1:
+        raise RuntimeError("注意力头的维度必须为偶数。")
 
     # 加载分词器
     if not (tokenizer_path := args.ckpt_path / "tokenizer").exists():
@@ -95,7 +98,7 @@ def main(args: argparse.Namespace):
         warnings.warn(
             "你没有提供标签，这会大大削弱模型的表现力。\n"
             "如果你不确定训练时数据集是否带有标签，最保险的方法，\n"
-            "请运行`python list_tags_from_datasets.py /path/to/your_dataset -o /path/to/tags.txt`，\n"
+            "请运行`python list_tags_from_datasets.py /path/to/dataset/metadata.json -o /path/to/tags.txt`，\n"
             "然后在运行本脚本时带上参数`-t /path/to/tags.txt`"
         )
 

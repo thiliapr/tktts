@@ -15,7 +15,6 @@ import orjson
 from tqdm import tqdm
 from tokenizers import Tokenizer, models, trainers
 from transformers import PreTrainedTokenizerFast
-from utils.tookit import parallel_map
 
 
 def train_tokenizer(model_data_samples: list[str], vocab_size: int, min_frequency: int):
@@ -82,37 +81,31 @@ def get_samples_worker(rank: int, metadata_files: list[pathlib.Path]) -> list[st
     return texts
 
 
-def get_samples(metadata_dirs: list[pathlib.Path], num_samples: int, num_workers: int) -> tuple[list[str], set[str]]:
+def get_samples(metadata_files: list[pathlib.Path], num_samples: int) -> tuple[list[str]]:
     """
-    从指定目录中提取元数据的标签和文本
+    从指定目录中提取元数据的文本
 
     Args:
-        dirs: 包含 JSON 元数据文件的目录列表
+        metadata_files: 元数据文件列表
         num_samples: 随机抽选多少个样本
-        num_workers: 执行任务的进程数
 
     Returns:
-        包含文本列表和标签集合的元组列表
+        文本列表
     """
-    # 获取样本文件
-    metadata_files = [
-        metadata_file
-        for metadata_dir in metadata_dirs
-        for metadata_file in metadata_dir.rglob("*.*")
-        if metadata_file.suffix.lower() == ".json"
+    # 获取所有样本
+    metadata = [
+        audio_metadata
+        for metadata_file in metadata_files
+        for audio_metadata in orjson.loads(metadata_file.read_bytes()).values()
     ]
 
     # 如果样本数量超过指定数量，则随机抽样
-    if len(metadata_files) > num_samples:
+    if len(metadata) > num_samples:
         print(f"样本数量超过 {num_samples}，随机抽样...")
-        metadata_files = random.sample(metadata_files, num_samples)
-
-    # 处理所有样本文件
-    results = parallel_map(get_samples_worker, [(worker_id, metadata_files[worker_id::num_workers]) for worker_id in range(num_workers)])
+        metadata = random.sample(metadata, num_samples)
 
     # 提取文本
-    samples = [text for worker_texts in results for text in worker_texts]
-
+    samples = [audio_metadata["text"] for audio_metadata in metadata]
     return samples
 
 
@@ -171,15 +164,14 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     Returns:
         包含解析后的参数的命名空间对象。
     """
-    parser = argparse.ArgumentParser(description="从游戏脚本提取每个对话的语音和文本。本脚本仅适用于 Artemis 引擎游戏。")
-    parser.add_argument("ckpt_path", type=pathlib.Path, help="分词器保存路径，将创建tokenizer子目录")
-    parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集目录路径，包含MIDI样本文件")
-    parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集目录路径，包含MIDI样本文件")
+    parser = argparse.ArgumentParser(description="为 TkTTS 训练分词器。")
+    parser.add_argument("ckpt_path", type=pathlib.Path, help="分词器保存路径，将创建`tokenizer`子目录")
+    parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集元数据文件路径")
+    parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集元数据文件路径")
     parser.add_argument("-nt", "--train-samples-count", type=int, default=2 ** 15, help="训练集样本数量，默认为 %(default)s")
     parser.add_argument("-nv", "--valid-samples-count", type=int, default=2 ** 15, help="验证集样本数量，默认为 %(default)s")
     parser.add_argument("-s", "--vocab-size", type=int, default=10000, help="分词器词汇表大小，默认为 %(default)s")
-    parser.add_argument("-f", "--min-frequency", type=int, default=24, help="token最小出现频率阈值，默认为 %(default)s")
-    parser.add_argument("-nw", "--num-workers", type=int, default=multiprocessing.cpu_count(), help="执行任务的进程数，默认为 %(default)s")
+    parser.add_argument("-f", "--min-frequency", type=int, default=24, help="token 最小出现频率阈值，默认为 %(default)s")
     parser.add_argument("-y", "--force", action="store_true", help="即使检查点已经存在分词器也要训练新的分词器")
     return parser.parse_args(args)
 
@@ -196,7 +188,7 @@ def main(args: argparse.Namespace):
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 处理所有训练样本文件
-    train_samples = get_samples(args.train_samples, args.train_samples_count, args.num_workers)
+    train_samples = get_samples(args.train_samples, args.train_samples_count)
 
     # 训练分词器
     print("开始训练分词器...")
@@ -225,7 +217,7 @@ def main(args: argparse.Namespace):
         print("\n验证集评估:")
 
         # 处理所有验证样本文件
-        valid_samples = get_samples(args.valid_samples, args.valid_samples_count, args.num_workers)
+        valid_samples = get_samples(args.valid_samples, args.valid_samples_count)
 
         # 评估验证集效果
         valid_metrics = validate(valid_samples, tokenizer)

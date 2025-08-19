@@ -22,6 +22,7 @@ from torch.utils.data import Dataset, Sampler, DataLoader
 from matplotlib import pyplot as plt
 from utils.checkpoint import TagLabelEncoder, TkTTSMetrics, load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
+from utils.dataset import AudioMeatdata
 from utils.model import FastSpeech2
 from utils.tookit import parallel_map
 
@@ -35,7 +36,7 @@ class TkTTSDataset(Dataset):
     文本转语音数据集加载器，用于处理音频-文本配对数据
 
     Args:
-        data_dirs: 包含JSON元数据文件的根目录列表
+        metadata_files: 元数据文件列表
         tokenizer: 用于文本编码的预训练分词器
         tag_label_encoder: 标签编码器
         sample_rate: 音频采样率（Hz）
@@ -44,7 +45,6 @@ class TkTTSDataset(Dataset):
         hop_length: 帧移长度
         win_length: 窗函数长度
         num_mels: 梅尔频率倒谱系数数量
-        num_workers: 并行加载元数据的工作进程数（默认为CPU核心数）
 
     Yields:
         - 分词后的文本ID序列
@@ -53,15 +53,11 @@ class TkTTSDataset(Dataset):
         - 对应的梅尔谱图特征矩阵
         - 音频的音高序列
         - 音频的能量序列
-
-    Examples:
-        >>> tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
-        >>> dataset = TkTTSDataset([Path("/data/tts1"), Path("/data/tts2")], tokenizer)
     """
 
     def __init__(
         self,
-        data_dirs: list[pathlib.Path],
+        metadata_files: list[pathlib.Path],
         tokenizer: AutoTokenizer,
         tag_label_encoder: TagLabelEncoder,
         sample_rate: int,
@@ -70,8 +66,8 @@ class TkTTSDataset(Dataset):
         hop_length: int,
         win_length: int,
         num_mels: int,
-        num_workers: int = os.cpu_count()
     ):
+        self.data_samples = []
         self.sample_rate = sample_rate
         self.fft_length = fft_length
         self.frame_length = frame_length
@@ -79,65 +75,33 @@ class TkTTSDataset(Dataset):
         self.win_length = win_length
         self.num_mels = num_mels
 
-        # 递归扫描所有目录中的JSON元数据文件
-        metadata_files = [
-            file
-            for data_dir in data_dirs
-            for file in data_dir.rglob("*.*")
-            if file.suffix.lower() == ".json"
+        # 获取所有元数据
+        metadata = [
+            (metadata_file.parent / audio_path, audio_metadata)
+            for metadata_file in metadata_files
+            for audio_path, audio_metadata in orjson.loads(metadata_file.read_bytes()).items()
         ]
 
-        # 将文件均匀分配到各工作进程
-        worker_results = parallel_map(self._load_worker_data, [
-            (worker_id, metadata_files[worker_id::num_workers], tokenizer, tag_label_encoder, sample_rate, hop_length)
-            for worker_id in range(num_workers)
-        ])
+        # 并行执行任务
+        num_workers = max(min(os.cpu_count(), len(metadata) // 10), 1)  # 一个进程至少要获取 10 个音频元数据，并且至少有一个进程执行任务
+        results = parallel_map(self._worker_load_data, [(rank, metadata[rank::num_workers], tokenizer, tag_label_encoder, sample_rate, hop_length) for rank in range(num_workers)])
 
-        # 合并所有工作进程的结果
-        self.data_samples = [item for worker_data in worker_results for item in worker_data]
+        # 合并工作进程结果
+        self.data_samples = [data_sample for worker_data in results for data_sample in worker_data]
 
     @staticmethod
-    def _load_worker_data(
-        rank: int,
-        metadata_files: list[pathlib.Path],
-        tokenizer: AutoTokenizer,
-        tag_label_encoder: TagLabelEncoder,
-        sample_rate: float,
-        hop_length: int,
-    ) -> list[tuple[pathlib.Path, list[int], int]]:
-        """
-        工作进程数据处理函数，加载编码文本并预测音频帧数
+    def _worker_load_data(rank: int, metadata: list[tuple[pathlib.Path, AudioMeatdata]], tokenizer: AutoTokenizer, tag_label_encoder: TagLabelEncoder, sample_rate: int, hop_length: int) -> list[tuple[pathlib.Path, list[int], list[int], list[int], int]]:
+        # 初始化处理结果列表
+        data_samples = []
 
-        Args:
-            worker_id: 工作进程ID（用于进度条控制）
-            metadata_files: 分配给当前工作进程的文件列表
-            tokenizer: 文本编码分词器
-            tag_label_encoder: 标签编码器
-            sample_rate: 音频采样率（Hz）
-            hop_length: 帧移长度
-
-        Returns:
-            包含(音频文件, 文本token, 音频帧数)的元组列表
-        """
-        worker_data = []
-
-        for metadata_file in tqdm(metadata_files, disable=rank != 0):
-            # 加载文本元数据
-            metadata = orjson.loads(metadata_file.read_bytes())
-
+        # 遍历每一段音频元数据
+        for audio_path, audio_metadata in tqdm(metadata, disable=rank != 0):
             # 使用分词器编码
-            text_sequences = tokenizer.encode(metadata["text"])
+            text_sequences = tokenizer.encode(audio_metadata["text"])
 
             # 编码正面和负面提示
-            positive_prompt = tag_label_encoder.encode(metadata["positive_prompt"])
-            negative_prompt = tag_label_encoder.encode(metadata["negative_prompt"])
-
-            # 获取对应的音频文件路径（去除.json扩展名）
-            audio_path = metadata_file.with_suffix("")
-
-            # 检查音频文件是否存在
-            if not audio_path.exists():
-                continue
+            positive_prompt = tag_label_encoder.encode(audio_metadata["positive_prompt"])
+            negative_prompt = tag_label_encoder.encode(audio_metadata["negative_prompt"])
 
             # 加载音频并重采样
             audio, _ = librosa.load(audio_path, sr=sample_rate)
@@ -147,9 +111,9 @@ class TkTTSDataset(Dataset):
 
             # 计算特征帧数
             num_frames = (len(audio) + hop_length - 1) // hop_length
-            worker_data.append((audio_path, text_sequences, positive_prompt, negative_prompt, num_frames))
-
-        return worker_data
+            data_samples.append((audio_path, text_sequences, positive_prompt, negative_prompt, num_frames))
+        
+        return data_samples
 
     def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:
         audio_path, text_sequences, positive_prompt, negative_prompt, _ = self.data_samples[index]

@@ -9,6 +9,7 @@ import shutil
 from typing import Optional
 import orjson
 from tqdm import tqdm
+from utils.dataset import AudioMeatdata
 
 
 def convert_and_save(
@@ -17,7 +18,7 @@ def convert_and_save(
     output_dir: pathlib.Path,
     global_positive_prompt: list[str],
     global_negative_prompt: list[str]
-):
+) -> dict[str, AudioMeatdata]:
     """
     将脚本文件中的对话转换并保存到指定目录。
 
@@ -30,9 +31,10 @@ def convert_and_save(
         global_positive_prompt: 额外的正面标签列表，将与角色特定标签合并。
         global_negative_prompt: 额外的负面标签列表，将与角色特定标签合并。
     """
-    # 初始化进度条
+    # 初始化进度条、元数据
     progress_bar = tqdm()
     dialogue_lengths = []
+    metadata = {}
 
     for script_file_idx, script_file in enumerate(script_files):
         # 读取脚本文件内容
@@ -72,16 +74,17 @@ def convert_and_save(
             positive_prompt += character_label.get("positive_prompt", [])
             negative_prompt += character_label.get("negative_prompt", [])
 
-            # 写入标签文件
-            audio_metadata_file = (target_audio_path.parent / (target_audio_path.name + ".json"))
-            audio_metadata_file.write_bytes(orjson.dumps({
+            # 添加到元数据
+            metadata[target_audio_path.relative_to(output_dir).as_posix()] = {
                 "text": dialogue["text_content"],
                 "positive_prompt": positive_prompt,
                 "negative_prompt": negative_prompt
-            }))
+            }
 
             # 更新进度条
             progress_bar.update()
+    
+    return metadata
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
@@ -98,7 +101,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("script_dir", type=pathlib.Path, help="包含预处理后脚本文件的目录，这些文件应是由 extract_artemis.py 生成的 JSON 文件")
     parser.add_argument("character_label_mapping", type=pathlib.Path, help="格式为 {角色ID: [标签1, 标签2, ...]}，需要手动创建此映射")
     parser.add_argument("output_dir", type=pathlib.Path, help="结构为 {输出目录}/{角色ID}/{音频文件} 和对应的 JSON 标签文件")
-    parser.add_argument("-p", "--global-positive-prompt", type=str, action="append", default=[], help="给提取出来的数据集加全局正面标签，可以多次使用此选项。例如: 用`-pp source:セレクトオブリージュ`表示数据集来源")
+    parser.add_argument("-p", "--global-positive-prompt", type=str, action="append", default=[], help="给提取出来的数据集加全局正面标签，可以多次使用此选项。例如: 用`-p source:セレクトオブリージュ`表示数据集来源")
     parser.add_argument("-n", "--global-negative-prompt", type=str, action="append", default=[], help="给提取出来的数据集加全局负面标签，可以多次使用此选项")
     return parser.parse_args(args)
 
@@ -110,8 +113,11 @@ def main(args: argparse.Namespace):
     # 获取角色标签映射表
     character_label_mapping = orjson.loads(args.character_label_mapping.read_bytes())
 
-    # 并行执行转换任务
-    convert_and_save(script_files, character_label_mapping, args.output_dir, args.global_positive_prompt, args.global_negative_prompt)    
+    # 执行转换任务
+    metadata = convert_and_save(script_files, character_label_mapping, args.output_dir, args.global_positive_prompt, args.global_negative_prompt)    
+
+    # 将元数据写入一个文件，方便查找
+    (args.output_dir / "metadata.json").write_bytes(orjson.dumps(metadata))
 
 
 if __name__ == "__main__":

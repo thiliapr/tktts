@@ -7,7 +7,6 @@ import argparse
 import pathlib
 from typing import Optional
 import orjson
-from tqdm import tqdm
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
@@ -21,7 +20,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
         包含解析后的参数的命名空间对象。
     """
     parser = argparse.ArgumentParser(description="获取数据集出现的标签")
-    parser.add_argument("datasets", nargs="+", type=pathlib.Path, help="数据集路径列表")
+    parser.add_argument("datasets", nargs="+", type=pathlib.Path, help="数据集元数据文件路径列表")
     parser.add_argument("-o", "--output-file", type=str, default="-", help="输出路径。如果指定为`-`，则输出路径为标准输出。默认为输出到标准输出。")
     return parser.parse_args(args)
 
@@ -35,22 +34,14 @@ def main(args: argparse.Namespace):
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_func = lambda x: output_file.write_text(x + "\n", encoding="utf-8")
 
-    # 获取数据集文件列表
-    files = [
-        file
-        for dataset_dir in args.datasets
-        for file in dataset_dir.rglob("*.*")
-        if file.suffix.lower() == ".json"
-    ]
+    # 遍历数据集文件元数据，获取其中标签
+    tags = {
+        tag
+        for metadata_file in args.datasets
+        for audio_metadata in orjson.loads(metadata_file.read_bytes()).values()
+        for tag in (audio_metadata.get("positive_prompt", []) + audio_metadata.get("negative_prompt", []))
+    }
 
-    # 加载数据集并获取标签
-    tags = set()
-    progress_bar = tqdm(files)
-    for file in progress_bar:
-        tags |= set(orjson.loads(file.read_bytes()).get("positive_prompt", []))
-        tags |= set(orjson.loads(file.read_bytes()).get("negative_prompt", []))
-        progress_bar.set_postfix(found=len(tags))
-    
     # 按标签名称排序
     tags = sorted(tags)
 

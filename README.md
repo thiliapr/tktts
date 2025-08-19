@@ -34,41 +34,44 @@ pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu1
 ```bash
 wget https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2  # https://keithito.com/LJ-Speech-Dataset/
 ```
-然后写一个脚本，将数据集转化为这种结构：对于每一个音频，都应该有一个对应的元数据文件
+然后写一个脚本，将数据集转化为这种结构
 ```plaintext
 dataset
-+---select_oblige
-|   \---kuk
-|           fem_kuk_00001.ogg
-|           fem_kuk_00001.ogg.json
-|
-\---senren_banka
+    metadata.json
+    select_oblige
+        fem_kuk_00001.ogg
+    senren_banka
         akh108_001.ogg
-        akh108_001.ogg.json
 ```
-而元数据内容应类似这样
+而元数据`metadata.json`内容应类似这样：对于每一个音频，都应该在元数据有一个对应的条目
 ```json
 {
-    "text":"んー……文化部総括としての報告は、大してない。\n活動報告は同じく資料にまとめてあるから、それで",
-    "positive_prompt":["source:セレクトオブリージュ","sex:female","age:teenager","voice_actor:相模恋","character:夜刀くくる"],
-    "negative_prompt":["voice_actor:秋野花","character:鞍馬小春","character:獅童龍司","source:千恋＊万花","sex:male","voice_actor:風音","character:常陸茉子","character:コーチ","voice_actor:桜川未央","age:adult","voice_actor:由嘉鈍","voice_actor:七種結花","voice_actor:奏雨","voice_actor:沢澤砂羽","character:駒川みづは","voice_actor:飴川紫乃","character:星継銀音","character:ファイブ","voice_actor:椨もんじゃ","voice_actor:真宮ゆず","character:Ｋ子","character:一色奏命","character:中条比奈実","voice_actor:佐藤みかん","character:大屋汐莉","character:トウリ","character:猪谷心子","character:成宮帝雄","character:朝武秋穂","voice_actor:小鳥居夕花","voice_actor:天知遥","character:バアさん","age:old","voice_actor:北大路ゆき","character:モンステラ","voice_actor:北見六花","voice_actor:木住葵","character:朝武安晴","character:ムラサメ","voice_actor:ナオト†サンクチュアリ","character:北条花","character:葦華真智","voice_actor:碓氷珊瑚","character:レナ·リヒテナウアー","voice_actor:山崎高","character:Ｕ子","voice_actor:ちとせ杏","source:アイコトバ -Silver Snow Sister-","character:西山冴希","voice_actor:白砂菓夏海","character:一ノ瀬七","age:children","character:北条空","character:蓼科イヴ","voice_actor:東シヅ","character:朝武芳乃","character:鞍馬玄十郎","voice_actor:御苑生メイ","character:鞍馬廉太郎","voice_actor:遥そら"]
+    "select_oblige/kuk/fem_kuk_00001.ogg": {
+        "text": "XXXX",
+        "positive_prompt": ["sex:female"],
+        "negative": ["sex:male"]
+    },
+    "senren_banka/akh108_001.ogg": {
+        "text": "XXXX",
+        "positive_prompt": ["sex:female"],
+        "negative": ["sex:male"]
+    }
 }
 ```
-
 
 #### 从 Artemis 游戏中提取数据集
 1. 使用[GARbro](https://github.com/crskycode/GARbro)从游戏目录的`xxx.pfs`文件提取出`sound/vo`和`script`文件夹，分别保存到`/path/to/game/sound/vo`和`/path/to/game/script`
 2. 运行`python extract_artemis.py /path/to/game/script /path/to/game/sound/vo /path/to/artemis_pre_dataset`，它会输出一个角色ID对应的角色名次数
 3. 仿照`examples/select_oblige_c2t.json`和`examples/aikotoba_sss_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/artemis_c2t.json`
 4. 运行`python convert_artemis_to_dataset.py /path/to/artemis_pre_dataset /path/to/artemis_c2t.json /path/to/artemis_dataset -p source:<游戏名> -p <其他你想在所有对话加上的标签> -n <你想在所有对话加上的负面标签>`
-5. 你的数据集应该已经在`/path/to/artemis_dataset`了
+5. 你的数据集应该已经在`/path/to/artemis_dataset`了，元数据文件在`/path/to/artemis_dataset/metadata.json`
 
 #### 从 Kirikiri Z 游戏中提取数据集
 1. 使用[GARbro](https://github.com/crskycode/GARbro)分别从游戏目录的`data.xp3`文件和`voice.xp3`提取出`scn`和根目录文件夹，分别保存到`/path/to/game/script`和`/path/to/game/voice`
 2. 运行`python extract_kirikiriz.py /path/to/game/script /path/to/game/voice /path/to/kirikiriz_pre_dataset`，它会输出所有对话出现的角色名
 3. 仿照`examples/senren_banka_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/kirikiriz_c2t.json`
 4. 运行`python convert_kirikiriz_to_dataset.py /path/to/kirikiriz_pre_dataset /path/to/kirikiriz_c2t.json /path/to/kirikiriz_dataset -p source:<游戏名> -p <其他你想在所有对话加上的标签> -n <你想在所有对话加上的负面标签>`
-5. 你的数据集应该已经在`/path/to/kirikiriz_dataset`了
+5. 你的数据集应该已经在`/path/to/kirikiriz_dataset`了，元数据文件在`/path/to/artemis_dataset/metadata.json`
 
 ### 可选: 对数据集进行提示词增强
 我们都知道，有一些标签是不可能同时存在的，比如`sex:male`和`sex:female`就不可能同时出现在一个正面提示里，所以我们可以定义一堆标签互斥组，类似这样
@@ -81,7 +84,7 @@ dataset
 ```
 对于一个音频的元数据，我们遍历每一个标签互斥组（类型：集合），然后检测元数据的正面标签是否包含且仅包含了这个标签互斥组中的一个标签，比如
 ```python
-positive_prompt = {"age:children"}
+positive_prompt: set[str]
 negative_prompt: set[str]
 groups = [{"age:children", "age:teenager", "age:adult", "age:old"}, ...]
 for group in groups:
@@ -90,28 +93,52 @@ for group in groups:
 ```
 我写了一个脚本来节省自己造轮子的麻烦，你可以通过运行
 ```bash
-python augment_prompt_with_exclusion.py /path/to/dataset /path/to/dataset /path/to/mutually_exclusive_groups.json
+python augment_prompt_with_exclusion.py /path/to/dataset/metadata.json /path/to/dataset/metadata_augment.json /path/to/mutually_exclusive_groups.json
 ```
 来实现提示词增强
-> ![TIP]
-> 参数的两个`/path/to/dataset`是为了省提示增强后需要手动将改写后的`post_dataset`复制回`/path/to/dataset`的麻烦
-> 如果你想，你也可以指定一个`/path/to/dataset_pre`和`/path/to/dataset_post`，但这麻烦且毫无意义
-> 此处`/path/to/mutually_exclusive_groups.json`内容请参考`examples/mutually_exclusive_groups.json`
+
+### 可选: 合并数据集
+如果你有若干个数据集，像这样
+```plaintext
+datasets
+    shirakami_fubuki
+        metadata.json
+        ytb_live01_001.oog
+        ytb_live01_002.oog
+        ...
+    natsuiro_matsuri
+        metadata.json
+        ytb_live01_001.oog
+        ytb_live01_002.oog
+        ...
+```
+你可以通过将不同数据集放在一个文件夹，比如`/path/to/datasets`，然后运行
+```bash
+python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/to/datasets/natsuiro_matsuri/metadata.json -o /path/to/datasets/metadata.json
+```
+将其元数据合并到`/path/to/datasets/metadata.json`；此外，你可以将原来的`/path/to/datasets/shirakami_fubuki/metadata.json`和`/path/to/datasets/natsuiro_matsuri/metadata.json`删除
+
+### 可选: 切割数据集
+如果你进行了`合并数据集`那一步，那么你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
+```bash
+python split_dataset.py /path/to/datasets/metadata.json train.json:9 val.json:1
+```
+这样，你的`/path/to/datasets`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`
 
 ### 训练分词器
 ```bash
-python train_tokenizer.py /path/to/ckpt -t /path/to/train_dataset -v /path/to/val_dataset
+python train_tokenizer.py /path/to/ckpt -t /path/to/dataset/train.json -v /path/to/dataset/val.json
 ```
 
 ### 初始化检查点
 ```bash
-python list_tags_from_datasets.py /path/to/dataset -o /path/to/tags.txt
+python list_tags_from_datasets.py /path/to/dataset/train.json -o /path/to/tags.txt
 python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
 ```
 
 ### 训练模型
 ```bash
-python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/train_dataset -v /path/to/val_dataset
+python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.json -v /path/to/dataset/val.json
 ```
 将`<num_epochs>`替换为实际的你想训练的轮数  
 > [!TIP]

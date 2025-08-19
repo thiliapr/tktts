@@ -21,34 +21,29 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
         包含解析后的参数的命名空间对象。
     """
     parser = argparse.ArgumentParser(description="应用互斥标签，将未出现在正面标签中的同组互斥标签加入负面标签")
-    parser.add_argument("input_dir", type=pathlib.Path, help="包含待处理 JSON 文件的输入目录路径")
-    parser.add_argument("output_dir", type=pathlib.Path, help="处理结果输出的目录路径")
+    parser.add_argument("input_metadata", type=pathlib.Path, help="待处理元数据文件")
+    parser.add_argument("output_metadata", type=pathlib.Path, help="结果输出的元数据文件")
     parser.add_argument("mutually_exclusive_groups", type=pathlib.Path, help="定义互斥标签组的 JSON 文件路径")
     return parser.parse_args(args)
 
 
 def main(args: argparse.Namespace):
-    # 获取数据集文件列表
-    files = [
-        file
-        for file in args.input_dir.rglob("*.*")
-        if file.suffix.lower() == ".json"
-    ]
+    # 检测输入和输出是否同一目录
+    if args.input_metadata.parent.resolve() != args.output_metadata.parent.resolve():
+        raise RuntimeError("`input_metadata`和`output_metadata`必须在同一目录下。这是因为元数据记录的音频路径是相对路径，不能只移动音频文件或只移动元数据文件。")
 
     # 加载互斥标签组并转换为集合列表
     mutually_exclusive_groups = orjson.loads(args.mutually_exclusive_groups.read_bytes())
     mutually_exclusive_groups = [set(group) for group in mutually_exclusive_groups]
 
-    # 遍历数据集每一个元数据文件
-    for file in tqdm(files):
-        # 加载元数据
-        metadata = orjson.loads(file.read_bytes())
-
+    # 遍历数据集每一个音频元数据
+    metadata = orjson.loads(args.input_metadata.read_bytes())
+    for audio_path, audio_metadata in tqdm(metadata.items()):
         # 获取负面提示并转化为集合
-        negative_prompt = set(metadata.get("negative_prompt", []))
+        negative_prompt = set(audio_metadata.get("negative_prompt", []))
 
         # 如果存在正面提示，则遍历每一个标签互斥组
-        if positive_prompt := metadata.get("positive_prompt"):
+        if positive_prompt := audio_metadata.get("positive_prompt"):
             positive_prompt = set(positive_prompt)
             for group in mutually_exclusive_groups:
                 # 如果正面标签有且仅有一个标签在互斥标签组内，那么把这个组的其他标签全部加入负面提示
@@ -57,14 +52,10 @@ def main(args: argparse.Namespace):
                     negative_prompt.update(group - intersection)
         
         # orjson 不支持序列化集合，所以需要先把它转化为列表
-        metadata["negative_prompt"] = list(negative_prompt)
+        metadata[audio_path]["negative_prompt"] = list(negative_prompt)
 
-        # 构造输出路径，并创建输出目录
-        output_path = args.output_dir / file.relative_to(args.input_dir)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # 写入文件
-        output_path.write_bytes(orjson.dumps(metadata))
+    # 写入输出
+    args.output_metadata.write_bytes(orjson.dumps(metadata))
 
 
 if __name__ == "__main__":
