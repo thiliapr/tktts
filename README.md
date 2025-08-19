@@ -49,12 +49,12 @@ dataset
     "select_oblige/kuk/fem_kuk_00001.ogg": {
         "text": "XXXX",
         "positive_prompt": ["sex:female"],
-        "negative": ["sex:male"]
+        "negative_prompt": ["sex:male"]
     },
     "senren_banka/akh108_001.ogg": {
         "text": "XXXX",
         "positive_prompt": ["sex:female"],
-        "negative": ["sex:male"]
+        "negative_prompt": ["sex:male"]
     }
 }
 ```
