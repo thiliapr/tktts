@@ -68,12 +68,6 @@ class TkTTSDataset(Dataset):
         num_mels: int,
     ):
         self.data_samples = []
-        self.sample_rate = sample_rate
-        self.fft_length = fft_length
-        self.frame_length = frame_length
-        self.hop_length = hop_length
-        self.win_length = win_length
-        self.num_mels = num_mels
 
         # 获取所有元数据
         metadata = [
@@ -84,13 +78,27 @@ class TkTTSDataset(Dataset):
 
         # 并行执行任务
         num_workers = max(min(os.cpu_count(), len(metadata) // 10), 1)  # 一个进程至少要获取 10 个音频元数据，并且至少有一个进程执行任务
-        results = parallel_map(self._worker_load_data, [(rank, metadata[rank::num_workers], tokenizer, tag_label_encoder, sample_rate, hop_length) for rank in range(num_workers)])
+        results = parallel_map(self._worker_load_data, [
+            (rank, metadata[rank::num_workers], tokenizer, tag_label_encoder, sample_rate, fft_length, frame_length, win_length, hop_length, num_mels)
+            for rank in range(num_workers)
+        ])
 
         # 合并工作进程结果
         self.data_samples = [data_sample for worker_data in results for data_sample in worker_data]
 
     @staticmethod
-    def _worker_load_data(rank: int, metadata: list[tuple[pathlib.Path, AudioMeatdata]], tokenizer: AutoTokenizer, tag_label_encoder: TagLabelEncoder, sample_rate: int, hop_length: int) -> list[tuple[pathlib.Path, list[int], list[int], list[int], int]]:
+    def _worker_load_data(
+        rank: int,
+        metadata: list[tuple[pathlib.Path, AudioMeatdata]],
+        tokenizer: AutoTokenizer,
+        tag_label_encoder: TagLabelEncoder,
+        sample_rate: int,
+        fft_length: int,
+        frame_length: int,
+        win_length: int,
+        hop_length: int,
+        num_mels: int
+    ) -> list[tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]]:
         # 初始化处理结果列表
         data_samples = []
 
@@ -109,68 +117,58 @@ class TkTTSDataset(Dataset):
             # 去除首尾静音段
             audio, _ = librosa.effects.trim(audio)
 
-            # 计算特征帧数
-            num_frames = (len(audio) + hop_length - 1) // hop_length
-            data_samples.append((audio_path, text_sequences, positive_prompt, negative_prompt, num_frames))
+            # 计算梅尔频谱
+            mel_spectrogram = librosa.feature.melspectrogram(
+                y=audio,
+                sr=sample_rate,
+                n_fft=fft_length,
+                hop_length=hop_length,
+                win_length=win_length,
+                n_mels=num_mels
+            ).T
+
+            # 计算音高
+            fmin = librosa.note_to_hz("C2")  # 最低频率（男性~65Hz，女性~100Hz）
+            fmax = librosa.note_to_hz("C7")  # 最高频率
+
+            # 最高频率
+            f0, voiced_flag, _ = librosa.pyin(
+                audio,
+                fmin=fmin,
+                fmax=fmax,
+                sr=sample_rate,
+                frame_length=frame_length,
+                hop_length=hop_length,
+            )
+
+            # 对数变换（避免取log(0)）
+            log_f0 = np.zeros_like(f0)
+            log_f0[voiced_flag] = np.log(f0[voiced_flag])
+
+            # 归一化到 [0, 1]
+            log_min = np.log(fmin)
+            log_max = np.log(fmax)
+            f0_normalized = (log_f0 - log_min) / (log_max - log_min)
+
+            # 计算短时能量（RMS）
+            energy = librosa.feature.rms(
+                y=audio,
+                frame_length=frame_length,
+                hop_length=hop_length,
+                center=True,
+            ).squeeze(0)
+
+            # 转化为 dB 单位
+            energy_db = librosa.amplitude_to_db(energy)
+
+            # 线性映射到 [0, 1]
+            energy_normalized = (energy_db - energy_db.min()) / (energy_db.max() - energy_db.min())
+            data_samples.append((text_sequences, positive_prompt, negative_prompt, mel_spectrogram, f0_normalized, energy_normalized))
         
         return data_samples
 
     def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:
-        audio_path, text_sequences, positive_prompt, negative_prompt, _ = self.data_samples[index]
-
-        # 加载音频并重采样
-        audio, _ = librosa.load(audio_path, sr=self.sample_rate)
-
-        # 去除首尾静音段
-        audio, _ = librosa.effects.trim(audio)
-
-        # 计算梅尔频谱
-        mel_spectrogram = librosa.feature.melspectrogram(
-            y=audio,
-            sr=self.sample_rate,
-            n_fft=self.fft_length,
-            hop_length=self.hop_length,
-            win_length=self.win_length,
-            n_mels=self.num_mels
-        ).T
-
-        # 计算音高
-        fmin = librosa.note_to_hz("C2")  # 最低频率（男性~65Hz，女性~100Hz）
-        fmax = librosa.note_to_hz("C7")  # 最高频率
-
-        # 最高频率
-        f0, voiced_flag, _ = librosa.pyin(
-            audio,
-            fmin=fmin,
-            fmax=fmax,
-            sr=self.sample_rate,
-            frame_length=self.frame_length,
-            hop_length=self.hop_length,
-        )
-
-        # 对数变换（避免取log(0)）
-        log_f0 = np.zeros_like(f0)
-        log_f0[voiced_flag] = np.log(f0[voiced_flag])
-
-        # 归一化到 [0, 1]
-        log_min = np.log(fmin)
-        log_max = np.log(fmax)
-        f0_normalized = (log_f0 - log_min) / (log_max - log_min)
-
-        # 计算短时能量（RMS）
-        energy = librosa.feature.rms(
-            y=audio,
-            frame_length=self.frame_length,
-            hop_length=self.hop_length,
-            center=True,
-        ).squeeze(0)
-
-        # 转化为 dB 单位
-        energy_db = librosa.amplitude_to_db(energy)
-
-        # 线性映射到 [0, 1]
-        energy_normalized = (energy_db - energy_db.min()) / (energy_db.max() - energy_db.min())
-        return text_sequences, positive_prompt, negative_prompt, mel_spectrogram, f0_normalized, energy_normalized
+        return self.data_samples[index]
 
     def __len__(self) -> int:
         return len(self.data_samples)
@@ -204,8 +202,8 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         self.batches = []
 
         # 预计算所有样本的索引和长度
-        # dataset.data_samples 数据结构应为 list[tuple[音频路径, 文本 ID 序列, ..., 音频帧数]]
-        self.index_and_lengths = [(idx, len(dataset.data_samples[idx][1]) + dataset.data_samples[idx][-1]) for idx in range(len(dataset))]
+        # dataset.data_samples 数据结构应为 list[tuple[文本 ID 序列, ..., 音频特征]]
+        self.index_and_lengths = [(idx, len(dataset.data_samples[idx][1]) + len(dataset.data_samples[idx][-1])) for idx in range(len(dataset))]
         self.index_to_length = dict(self.index_and_lengths)
 
     def set_epoch(self, epoch: int) -> None:
