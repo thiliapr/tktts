@@ -80,12 +80,15 @@ def main(args: argparse.Namespace):
     # 生成音频
     mel_prediction, _, _, _ = model(text, positive_prompt, negative_prompt)  # [1, seq_len, n_mels]
 
+    # 去除批次维度，并转换为 NumPy 数组
+    mel_prediction = mel_prediction.squeeze(0).cpu().numpy()  # [seq_len, num_mels]
+
     # 打印帧数
     print(f"STFT 帧数: {len(mel_prediction)}")
 
     # 将生成的梅尔频谱转换为 STFT 矩阵
     stft_matrix = librosa.feature.inverse.mel_to_stft(
-        mel_prediction.squeeze(0).cpu().numpy().T,  # 转置为 [num_mels, seq_len]
+        mel_prediction.T,  # 转置为 [num_mels, seq_len]
         sr=extra_config["sample_rate"],
         n_fft=extra_config["fft_length"],
     )
