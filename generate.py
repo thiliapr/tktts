@@ -32,8 +32,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点路径")
     parser.add_argument("output_path", type=pathlib.Path, help="生成音频文件保存路径")
     parser.add_argument("text", type=str, help="文本")
-    parser.add_argument("-p", "--positive-prompt", type=str, action="append", default=[], help="正面提示词，可以是多个词")
-    parser.add_argument("-n", "--negative-prompt", type=str, action="append", default=[], help="负面提示词，可以是多个词")
+    parser.add_argument("-p", "--positive-prompt", type=str, action="append", help="正面提示词，可以是多个词")
+    parser.add_argument("-n", "--negative-prompt", type=str, action="append", help="负面提示词，可以是多个词")
     return parser.parse_args(args)
 
 
