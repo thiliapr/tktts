@@ -526,13 +526,13 @@ class FastSpeech2(nn.Module):
 
         # 标签嵌入
         if positive_prompt:
-            tag_batch = pad_sequence([torch.tensor(t, dtype=int) for t in positive_prompt], batch_first=True, padding_value=0)
+            tag_batch = pad_sequence([torch.tensor(t, dtype=int, device=x.device) for t in positive_prompt], batch_first=True, padding_value=0)
             tag_mask = tag_batch == 0
 
             # 将标签嵌入添加到输入嵌入中
             x = x + (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
         if negative_prompt:
-            tag_batch = pad_sequence([torch.tensor(t, dtype=int) for t in negative_prompt], batch_first=True, padding_value=0)
+            tag_batch = pad_sequence([torch.tensor(t, dtype=int, device=x.device) for t in negative_prompt], batch_first=True, padding_value=0)
             tag_mask = tag_batch == 0
 
             # 从输入嵌入中减去负面标签嵌入
