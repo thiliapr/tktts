@@ -71,7 +71,7 @@ dataset
 2. 运行`python extract_kirikiriz.py /path/to/game/script /path/to/game/voice /path/to/kirikiriz_pre_dataset`，它会输出所有对话出现的角色名
 3. 仿照`examples/senren_banka_c2t.json`，根据第二步的输出，写你要提取的游戏的角色ID-角色名映射表，保存到`/path/to/kirikiriz_c2t.json`
 4. 运行`python convert_kirikiriz_to_dataset.py /path/to/kirikiriz_pre_dataset /path/to/kirikiriz_c2t.json /path/to/kirikiriz_dataset -p source:<游戏名> -p <其他你想在所有对话加上的标签> -n <你想在所有对话加上的负面标签>`
-5. 你的数据集应该已经在`/path/to/kirikiriz_dataset`了，元数据文件在`/path/to/artemis_dataset/metadata.json`
+5. 你的数据集应该已经在`/path/to/kirikiriz_dataset`了，元数据文件在`/path/to/kirikiriz_dataset/metadata.json`
 
 ### 可选: 对数据集进行提示词增强
 我们都知道，有一些标签是不可能同时存在的，比如`sex:male`和`sex:female`就不可能同时出现在一个正面提示里，所以我们可以定义一堆标签互斥组，类似这样
