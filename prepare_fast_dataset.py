@@ -159,10 +159,10 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
         包含解析后的参数的命名空间对象。
     """
     parser = argparse.ArgumentParser(description="准备专用于特定检查点训练的数据集，用于加快训练时数据加载速度。注意：为此检查点准备的数据集不能直接用于其他参数配置的检查点训练。")
-    parser.add_argument("dataset_metadata", type=pathlib.Path, help="数据集元数据文件的完整路径。该文件应包含音频文件路径及其对应文本和标签信息的JSON格式数据")
+    parser.add_argument("dataset_metadata", type=pathlib.Path, help="数据集元数据文件的完整路径。该文件应包含音频文件路径及其对应文本和标签信息的 JSON 格式数据")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="目标检查点文件的完整路径。数据集将根据此检查点的配置参数（如分词器、采样率等）进行适配准备")
     parser.add_argument("output_dir", type=pathlib.Path, help="处理后的特征数据集输出目录路径。所有提取的音频特征和转换后的文本序列将保存在此目录中")
-    parser.add_argument("-n", "--num-workers", type=int, default=os.cpu_count(), help="并行处理任务的工作进程数量。默认值为当前系统的CPU核心数 %(default)s")
+    parser.add_argument("-n", "--num-workers", type=int, default=os.cpu_count(), help="并行处理任务的工作进程数量。默认值为当前系统的 CPU 核心数 %(default)s")
     return parser.parse_args(args)
 
 
