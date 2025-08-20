@@ -117,13 +117,42 @@ datasets
 python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/to/datasets/natsuiro_matsuri/metadata.json -o /path/to/datasets/metadata.json
 ```
 将其元数据合并到`/path/to/datasets/metadata.json`；此外，你可以将原来的`/path/to/datasets/shirakami_fubuki/metadata.json`和`/path/to/datasets/natsuiro_matsuri/metadata.json`删除
+> [!TIP]
+> 这个步骤可以运用在通用训练集和快速训练数据集。
+
+### 将通用数据集转化为快速训练数据集
+由于直接训练时加载音频数据十分缓慢，不能发挥 GPU 训练的快的优势，所以这里我们采用：将训练数据预处理缓存在硬盘，在训练时直接加载而无需处理的方法，加快数据加载速度。
+
+这样的数据集只适用于训练以下超参完全相同的检查点：
+- tokenizer
+- tag_label_encoder（但是如果是在原始标签后又新增标签的没事，比如说，``{"[UNK]": 0, "tag": 1, "new": 2}`可以兼容`{"[UNK]": 0, "tag": 1}`的标签编码器）
+- sample_rate
+- fft_length
+- frame_length
+- hop_length
+- win_length
+- num_mels
+
+将通用数据集转化为快速训练数据集，包含几个步骤：
+- 文本：用分词器编码为文本序列
+- 正面、负面提示词：用标签编码器转换为提示词序列
+- 音频：转换为梅尔频谱、音高和能量
+
+考虑到兼容两种加载方式（加载原始通用数据集和快速训练数据集）的代码很难维护（见[tkaimidi](https://github.com/thiliapr/tkaimidi)一直没维护），所以这里强制要求必须转换为快速训练数据集。你可以运行
+```bash
+python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset
+```
+新的元数据将会在`/path/to/fast_dataset/metadata.json`
 
 ### 可选: 切割数据集
-如果你进行了`合并数据集`那一步，那么你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
+你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
 ```bash
-python split_dataset.py /path/to/datasets/metadata.json train.json:9 val.json:1
+python split_dataset.py /path/to/dataset/metadata.json train.json:9 val.json:1
 ```
-这样，你的`/path/to/datasets`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`
+这样，你的`/path/to/dataset`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`。
+> [!TIP]
+> 这个步骤可以运用在通用训练集和快速训练数据集。
+> 比如说你可以先在通用数据集划分出训练集和验证集，然后再准备快速训练数据集；或者先准备快速训练数据集，然后在快速训练数据集，然后再划分训练集和验证集。
 
 ### 训练分词器
 ```bash

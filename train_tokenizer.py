@@ -9,7 +9,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizers的并行处�
 import random
 import pathlib
 import argparse
-import multiprocessing
 from typing import Any, Optional, Union
 import orjson
 from tqdm import tqdm

@@ -58,7 +58,7 @@ class TagLabelEncoder:
         return [self.vocab[tag] for tag in tag_list if tag in self.vocab]
 
 
-class ExtraConfig(TypedDict):
+class TkTTSExtraConfig(TypedDict):
     """
     TkTTS-FreeSpeech2 额外的配置。
     具体来说，是无法从模型状态推断的配置，比如训练模型时音频的预处理配置等。
@@ -67,14 +67,14 @@ class ExtraConfig(TypedDict):
         num_heads: 注意力头的数量
         sample_rate: 目标采样率
         fft_length: FFT 窗口长度
-        pyin_frame_length: pYIN算法的分析帧长度
+        frame_length: YIN 算法的分析帧长度
         hop_length: 帧移长度
         win_length: 窗函数长度
     """
     num_heads: int
     sample_rate: int
     fft_length: int
-    pyin_frame_length: int
+    frame_length: int
     hop_length: int
     win_length: int
 
@@ -88,7 +88,7 @@ class TkTTSMetrics(TypedDict):
         val_loss: 验证损失平均值、标准差
     """
     train_loss: list[dict[str, Union[float, int]]]
-    val_loss: list[dict[str, Union[float, int]]]
+    val_loss: list[dict[str, float]]
 
 
 def save_checkpoint(
@@ -96,7 +96,7 @@ def save_checkpoint(
     model_state: Mapping[str, Any],
     optimizer_state: Mapping[str, Any],
     metrics: TkTTSMetrics,
-    extra_config: Optional[ExtraConfig] = None,
+    extra_config: Optional[TkTTSExtraConfig] = None,
     tag_label_encoder: Optional[TagLabelEncoder] = None
 ):
     """
@@ -126,7 +126,7 @@ def save_checkpoint(
         (path / "tags.json").write_bytes(orjson.dumps(tag_label_encoder.vocab))
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], ExtraConfig, FastSpeech2Config, TagLabelEncoder]:
+def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], TkTTSExtraConfig, FastSpeech2Config, TagLabelEncoder]:
     """
     从指定路径加载模型的检查点（用于推理）。
 
@@ -158,7 +158,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any
     return tokenizer, model_state, extra_config, model_config, tag_label_encoder
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], ExtraConfig, FastSpeech2Config, TagLabelEncoder, Mapping[str, Any], TkTTSMetrics]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], FastSpeech2Config, Mapping[str, Any], TkTTSMetrics]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 
@@ -166,7 +166,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
         path: 加载检查点的目录路径
 
     Returns:
-        分词器、模型的状态、模型额外的配置、用于创建模型的配置、标签编码器、优化器的状态、指标
+        模型的状态、用于创建模型的配置、优化器的状态、指标
 
     Examples:
         >>> tokenizer, msd, model_config, generation_config, tag_label_encoder, osd, metrics = load_checkpoint_train(pathlib.Path("ckpt"))
@@ -177,14 +177,23 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
         >>> # 继续训练...
     """
     # 加载分词器和模型状态
-    tokenizer, model_state, extra_config, model_config, tag_label_encoder = load_checkpoint(path)
+    _, model_state, _, model_config, _ = load_checkpoint(path)
 
     # 检查并加载优化器权重
     optimizer_state = torch.load(path / "optimizer.pth", weights_only=True, map_location=torch.device("cpu"))
 
-    # 尝试加载指标文件
+    # 加载指标文件
     metrics = orjson.loads((path / "metrics.json").read_bytes())
-    return tokenizer, model_state, extra_config, model_config, tag_label_encoder, optimizer_state, metrics
+
+    # 将验证指标的非数字值全部转化为 NaN
+    for loss_info in metrics["val_loss"]:  # 遍历每一个 Epoch 的验证损失信息
+        for key, value in loss_info.items():  # 遍历每一个损失信息（比如损失平均值、标准差）
+            # 如果值不是一个浮点数或者一个整数，则将值置为 NaN
+            if not (isinstance(value, float) or isinstance(value, int)):
+                loss_info[key] = float("nan")
+    
+    # 返回训练所需信息
+    return model_state, model_config, optimizer_state, metrics
 
 
 def extract_config(model_state: dict[str, Any], num_heads: int) -> FastSpeech2Config:

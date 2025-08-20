@@ -26,14 +26,19 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace):
-    # 获取数据集元数据
+    # 验证输出目录是否包含所有输入数据集目录
+    output_parent = args.output_file.parent
+    if not all(metadata_file.parent.is_relative_to(output_parent) for metadata_file in args.datasets):
+        raise RuntimeError(f"输出目录（{output_parent}）必须同时是所有输入数据集目录的父目录")
+
+    # 合并元数据
     metadata = {
-        (metadata_file.parent.relative_to(args.output_file.parent) / pathlib.Path(audio_path)).as_posix(): audio_metadata
+        (metadata_file.parent.relative_to(output_parent) / audio_path).as_posix(): audio_metadata
         for metadata_file in args.datasets
         for audio_path, audio_metadata in orjson.loads(metadata_file.read_bytes()).items()
     }
 
-    # 输出到文件
+    # 将合并后的元数据序列化为 JSON 并写入输出文件
     args.output_file.write_bytes(orjson.dumps(metadata))
 
 

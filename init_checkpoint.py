@@ -62,7 +62,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-fl", "--fft-length", type=int, default=DEFAULT_FFT_LENGTH, help="FFT窗口长度，默认为 %(default)s")
     parser.add_argument("-wl", "--win-length", type=int, default=DEFAULT_WIN_LENGTH, help="窗函数长度，默认为 %(default)s")
     parser.add_argument("-hl", "--hop-length", type=int, default=DEFAULT_HOP_LENGTH, help="帧移长度，默认为 %(default)s")
-    parser.add_argument("-pl", "--pyin-frame-length", type=int, default=DEFAULT_PYIN_FRAME_LENGTH, help="pYIN算法的分析帧长度，应与 STFT 的 win_length 协调，通常设为 win_length 的2倍，默认为 %(default)s")
+    parser.add_argument("-pl", "--pyin-frame-length", type=int, default=DEFAULT_PYIN_FRAME_LENGTH, help="pYIN算法的分析帧长度，应与 STFT 的 win_length 协调，通常设为 win_length 的 2 倍，默认为 %(default)s")
     parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="注意力头的数量，默认为 %(default)s")
     parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="每个注意力头的维度，默认为 %(default)s")
     parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="前馈网络的隐藏层维度，默认为 %(default)s")

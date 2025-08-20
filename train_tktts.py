@@ -22,7 +22,7 @@ from torch.utils.data import Dataset, Sampler, DataLoader
 from matplotlib import pyplot as plt
 from utils.checkpoint import TagLabelEncoder, TkTTSMetrics, load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
-from utils.dataset import AudioMeatdata
+from utils.dataset import AudioMetadata
 from utils.model import FastSpeech2
 from utils.tookit import parallel_map
 
@@ -41,7 +41,7 @@ class TkTTSDataset(Dataset):
         tag_label_encoder: 标签编码器
         sample_rate: 音频采样率（Hz）
         fft_length: FFT窗口长度
-        frame_length: pYIN算法的分析帧长度
+        frame_length: YIN 算法的分析帧长度
         hop_length: 帧移长度
         win_length: 窗函数长度
         num_mels: 梅尔频率倒谱系数数量
@@ -55,118 +55,21 @@ class TkTTSDataset(Dataset):
         - 音频的能量序列
     """
 
-    def __init__(
-        self,
-        metadata_files: list[pathlib.Path],
-        tokenizer: AutoTokenizer,
-        tag_label_encoder: TagLabelEncoder,
-        sample_rate: int,
-        fft_length: int,
-        frame_length: int,
-        hop_length: int,
-        win_length: int,
-        num_mels: int,
-    ):
+    def __init__(self, metadata_files: list[pathlib.Path]):
+        # 初始化数据列表
         self.data_samples = []
 
-        # 获取所有元数据
-        metadata = [
+        # 获取所有元数据和音频并加入数据列表
+        for audio_path, audio_metadata in tqdm([
             (metadata_file.parent / audio_path, audio_metadata)
             for metadata_file in metadata_files
             for audio_path, audio_metadata in orjson.loads(metadata_file.read_bytes()).items()
-        ]
+        ]):
+            # 加载音频信息（梅尔频谱、音高、能量）
+            audio = np.load(audio_path)
 
-        # 并行执行任务
-        num_workers = max(min(os.cpu_count(), len(metadata) // 10), 1)  # 一个进程至少要获取 10 个音频元数据，并且至少有一个进程执行任务
-        num_workers = 1
-        results = parallel_map(self._worker_load_data, [
-            (rank, metadata[rank::num_workers], tokenizer, tag_label_encoder, sample_rate, fft_length, frame_length, win_length, hop_length, num_mels)
-            for rank in range(num_workers)
-        ])
-
-        # 合并工作进程结果
-        self.data_samples = [data_sample for worker_data in results for data_sample in worker_data]
-
-    @staticmethod
-    def _worker_load_data(
-        rank: int,
-        metadata: list[tuple[pathlib.Path, AudioMeatdata]],
-        tokenizer: AutoTokenizer,
-        tag_label_encoder: TagLabelEncoder,
-        sample_rate: int,
-        fft_length: int,
-        frame_length: int,
-        win_length: int,
-        hop_length: int,
-        num_mels: int
-    ) -> list[tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]]:
-        # 初始化处理结果列表
-        data_samples = []
-
-        # 遍历每一段音频元数据
-        for audio_path, audio_metadata in tqdm(metadata, disable=rank != 0):
-            # 使用分词器编码
-            text_sequences = tokenizer.encode(audio_metadata["text"])
-
-            # 编码正面和负面提示
-            positive_prompt = tag_label_encoder.encode(audio_metadata["positive_prompt"])
-            negative_prompt = tag_label_encoder.encode(audio_metadata["negative_prompt"])
-
-            # 加载音频并重采样
-            audio, _ = librosa.load(audio_path, sr=sample_rate)
-
-            # 去除首尾静音段
-            audio, _ = librosa.effects.trim(audio)
-
-            # 计算梅尔频谱
-            mel_spectrogram = librosa.feature.melspectrogram(
-                y=audio,
-                sr=sample_rate,
-                n_fft=fft_length,
-                hop_length=hop_length,
-                win_length=win_length,
-                n_mels=num_mels
-            ).T
-
-            # 计算音高
-            fmin = librosa.note_to_hz("C2")  # 最低频率（男性~65Hz，女性~100Hz）
-            fmax = librosa.note_to_hz("C7")  # 最高频率
-
-            # 最高频率
-            f0 = librosa.yin(
-                audio,
-                fmin=fmin,
-                fmax=fmax,
-                sr=sample_rate,
-                frame_length=frame_length,
-                hop_length=hop_length,
-            )
-
-            # 对数变换（避免取log(0)）
-            log_f0 = np.full_like(f0, np.finfo(f0.dtype).eps, dtype=f0.dtype)
-            log_f0 = np.log(f0)
-
-            # 归一化到 [0, 1]
-            log_min = np.log(fmin)
-            log_max = np.log(fmax)
-            f0_normalized = (log_f0 - log_min) / (log_max - log_min)
-
-            # 计算短时能量（RMS）
-            energy = librosa.feature.rms(
-                y=audio,
-                frame_length=frame_length,
-                hop_length=hop_length,
-                center=True,
-            ).squeeze(0)
-
-            # 转化为 dB 单位
-            energy_db = librosa.amplitude_to_db(energy)
-
-            # 线性映射到 [0, 1]
-            energy_normalized = (energy_db - energy_db.min()) / (energy_db.max() - energy_db.min())
-            data_samples.append((text_sequences, positive_prompt, negative_prompt, mel_spectrogram, f0_normalized, energy_normalized))
-        
-        return data_samples
+            # 添加音频元数据信息和音频到列表
+            self.data_samples.append((audio_metadata["text"], audio_metadata["positive_prompt"], audio_metadata["negative_prompt"], audio["mel"], audio["pitch"], audio["energy"]))
 
     def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:
         return self.data_samples[index]
@@ -181,11 +84,11 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
 
     该采样器会:
     1. 根据序列长度对样本进行排序
-    2. 动态创建批次，确保每个批次的token总数不超过max_batch_tokens
+    2. 动态创建批次，确保每个批次的 token 总数不超过 max_batch_tokens
     3. 每个epoch都会重新打乱数据顺序
 
     Attributes:
-        max_batch_tokens: 单个批次允许的最大token数量
+        max_batch_tokens: 单个批次允许的最大 token 数量
         seed: 随机种子
         batches: 当前分配到的批次列表
 
@@ -204,7 +107,7 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
 
         # 预计算所有样本的索引和长度
         # dataset.data_samples 数据结构应为 list[tuple[文本 ID 序列, ..., 音频特征]]
-        self.index_and_lengths = [(idx, len(dataset.data_samples[idx][1]) + len(dataset.data_samples[idx][-1])) for idx in range(len(dataset))]
+        self.index_and_lengths = [(idx, len(dataset.data_samples[idx][0]) + len(dataset.data_samples[idx][-1])) for idx in range(len(dataset))]
         self.index_to_length = dict(self.index_and_lengths)
 
     def set_epoch(self, epoch: int) -> None:
@@ -342,7 +245,7 @@ def fastspeech2_loss(
     energy_target: torch.Tensor,
 ) -> torch.Tensor:
     """
-    计算FastSpeech2模型的复合损失函数，包含音频、时长、音高和能量四个损失分量。
+    计算 FastSpeech2 模型的复合损失函数，包含音频、时长、音高和能量四个损失分量。
     
     该函数首先根据预测的时长生成填充掩码，然后分别计算：
     1. 预测音频与目标音频的L1损失
@@ -613,7 +516,7 @@ def main(args: argparse.Namespace):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 读取检查点
-    tokenizer, model_state_dict, extra_config, model_config, tag_label_encoder, optimiezer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
+    model_state_dict, model_config, optimiezer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
     model = FastSpeech2(model_config, dropout=args.dropout)
@@ -639,13 +542,13 @@ def main(args: argparse.Namespace):
     scaler = GradScaler(device)
 
     # 加载训练数据集
-    train_dataset = TkTTSDataset(args.train_dataset, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["pyin_frame_length"], extra_config["hop_length"], extra_config["win_length"], model_config.num_mels)
+    train_dataset = TkTTSDataset(args.train_dataset)
     train_sampler = TkTTSDatasetSampler(train_dataset, args.train_max_batch_tokens)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
-        val_dataset = TkTTSDataset(args.val_dataset, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["pyin_frame_length"], extra_config["hop_length"], extra_config["win_length"], model_config.num_mels)
+        val_dataset = TkTTSDataset(args.val_dataset)
         val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 

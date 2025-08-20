@@ -6,7 +6,7 @@
 from typing import TypedDict
 
 
-class AudioMeatdata(TypedDict):
+class AudioMetadata(TypedDict):
     "一段音频的元数据"
     positive_prompt: list[str]
     negative_prompt: list[str]
