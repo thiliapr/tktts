@@ -13,7 +13,7 @@ import numpy as np
 from torch import optim
 from transformers import AutoTokenizer
 from utils.checkpoint import TagLabelEncoder, save_checkpoint
-from utils.constants import DEFAULT_FFT_CONV1_KERNEL_SIZE, DEFAULT_FFT_CONV2_KERNEL_SIZE, DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_MELS, DEFAULT_PREDICTOR_KERNEL_SIZE, DEFAULT_PYIN_FRAME_LENGTH, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH, DEFAULT_VARIANCE_BINS
+from utils.constants import DEFAULT_FFT_CONV1_KERNEL_SIZE, DEFAULT_FFT_CONV2_KERNEL_SIZE, DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_MELS, DEFAULT_PREDICTOR_KERNEL_SIZE, DEFAULT_FRAME_LENGTH, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH, DEFAULT_VARIANCE_BINS
 from utils.model import FastSpeech2, FastSpeech2Config
 
 
@@ -62,12 +62,12 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-fl", "--fft-length", type=int, default=DEFAULT_FFT_LENGTH, help="FFT窗口长度，默认为 %(default)s")
     parser.add_argument("-wl", "--win-length", type=int, default=DEFAULT_WIN_LENGTH, help="窗函数长度，默认为 %(default)s")
     parser.add_argument("-hl", "--hop-length", type=int, default=DEFAULT_HOP_LENGTH, help="帧移长度，默认为 %(default)s")
-    parser.add_argument("-pl", "--pyin-frame-length", type=int, default=DEFAULT_PYIN_FRAME_LENGTH, help="pYIN算法的分析帧长度，应与 STFT 的 win_length 协调，通常设为 win_length 的 2 倍，默认为 %(default)s")
+    parser.add_argument("-pl", "--frame-length", type=int, default=DEFAULT_FRAME_LENGTH, help="YIN 算法的分析帧长度，应与 STFT 的 win_length 协调，通常设为 win_length 的 2 倍，默认为 %(default)s")
     parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="注意力头的数量，默认为 %(default)s")
     parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="每个注意力头的维度，默认为 %(default)s")
     parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="前馈网络的隐藏层维度，默认为 %(default)s")
-    parser.add_argument("-fk1", "--fft-kernel-size-1", type=int, default=DEFAULT_FFT_CONV1_KERNEL_SIZE, help="FFT第一个卷积核大小，默认为 %(default)s")
-    parser.add_argument("-fk2", "--fft-kernel-size-2", type=int, default=DEFAULT_FFT_CONV2_KERNEL_SIZE, help="FFT第二个卷积核大小，默认为 %(default)s")
+    parser.add_argument("-fk1", "--fft-kernel-size-1", type=int, default=DEFAULT_FFT_CONV1_KERNEL_SIZE, help="FFT 第一个卷积核大小，默认为 %(default)s")
+    parser.add_argument("-fk2", "--fft-kernel-size-2", type=int, default=DEFAULT_FFT_CONV2_KERNEL_SIZE, help="FFT 第二个卷积核大小，默认为 %(default)s")
     parser.add_argument("-pk", "--predictor-kernel-size", type=int, default=DEFAULT_PREDICTOR_KERNEL_SIZE, help="预测器卷积核大小，默认为 %(default)s")
     parser.add_argument("-vb", "--variance-bins", type=int, default=DEFAULT_VARIANCE_BINS, help="变异性预测器的 bins 数量，默认为 %(default)s")
     parser.add_argument("-el", "--num-encoder-layers", type=int, default=DEFAULT_NUM_ENCODER_LAYERS, help="编码器层数，默认为 %(default)s")
@@ -136,7 +136,7 @@ def main(args: argparse.Namespace):
         "num_heads": args.num_heads,
         "sample_rate": args.sample_rate,
         "fft_length": args.fft_length,
-        "pyin_frame_length": args.pyin_frame_length,
+        "frame_length": args.frame_length,
         "hop_length": args.hop_length,
         "win_length": args.win_length,
     }
