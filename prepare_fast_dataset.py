@@ -177,6 +177,9 @@ def main(args: argparse.Namespace):
         for audio_path, audio_metadata in orjson.loads(args.dataset_metadata.read_bytes()).items()
     ]
 
+    # 打印开始转换消息
+    print(f"正在转换 {len(metadata)} 个音频及元数据 ...")
+
     # 并行转换数据
     results = parallel_map(convert_and_save, [
         (rank, metadata[rank::args.num_workers], args.dataset_metadata.parent, args.output_dir, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["frame_length"], extra_config["win_length"], extra_config["hop_length"], model_config.num_mels)
