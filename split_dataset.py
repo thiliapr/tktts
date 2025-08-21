@@ -53,7 +53,7 @@ def main(args: argparse.Namespace):
 
         # 将子集写入对应文件
         (args.dataset.parent / filename).write_bytes(orjson.dumps(dict(subset)))
-        print(f"数据集的 {proportion}/{total_proportion}，即 {split_data} 条数据，已保存到 {filename}")
+        print(f"数据集的 {proportion}/{total_proportion}，即 {len(split_data)} 条数据，已保存到 {filename}")
 
 
 if __name__ == "__main__":
