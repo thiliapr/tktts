@@ -246,9 +246,9 @@ class FFTBlock(nn.Module):
 
         # 自注意力和前馈网络
         self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
-        self.conv1 = Conv(dim_model, dim_feedforward, conv1_kernel_size, padding=(conv1_kernel_size - 1) // 2, device=device)
+        self.conv1 = Conv(dim_model, dim_feedforward, conv1_kernel_size, padding="same", device=device)
         self.activation = nn.GELU()
-        self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, padding=(conv2_kernel_size - 1) // 2, device=device)
+        self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
 
         # 归一化和缩放
         self.attention_norm = ScaleNorm(dim_model)
@@ -318,8 +318,8 @@ class VariancePredictor(nn.Module):
 
     def __init__(self, dim_model: int, kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
-        self.conv1 = Conv(dim_model, dim_model, kernel_size, padding=(kernel_size - 1) // 2, device=device)
-        self.conv2 = Conv(dim_model, dim_model, kernel_size, padding=1, device=device)
+        self.conv1 = Conv(dim_model, dim_model, kernel_size, padding="same", device=device)
+        self.conv2 = Conv(dim_model, dim_model, kernel_size, padding="same", device=device)
         self.output_layer = nn.Linear(dim_model, 1, device=device)
         self.norm1 = ScaleNorm(dim_model)
         self.norm2 = ScaleNorm(dim_model)
