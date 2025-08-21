@@ -189,6 +189,9 @@ def main(args: argparse.Namespace):
     # 保存到输出路径
     (args.output_dir / args.metadata_filename).write_bytes(orjson.dumps(processed_metadata))
 
+    # 打印保存成功信息
+    print(f"预处理完成，快速训练数据集已保存到`{args.output_dir}`，其中`{args.metadata_filename}`是该数据集的元数据文件。")
+
 
 if __name__ == "__main__":
     main(parse_args())

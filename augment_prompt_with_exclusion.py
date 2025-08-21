@@ -22,16 +22,12 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="应用互斥标签，将未出现在正面标签中的同组互斥标签加入负面标签")
     parser.add_argument("input_metadata", type=pathlib.Path, help="待处理元数据文件")
-    parser.add_argument("output_metadata", type=pathlib.Path, help="结果输出的元数据文件")
+    parser.add_argument("output_filename", type=str, help="结果输出的元数据文件名。结果元数据文件将与待处理元数据文件同一目录")
     parser.add_argument("mutually_exclusive_groups", type=pathlib.Path, help="定义互斥标签组的 JSON 文件路径")
     return parser.parse_args(args)
 
 
 def main(args: argparse.Namespace):
-    # 检测输入和输出是否同一目录
-    if args.input_metadata.parent.resolve() != args.output_metadata.parent.resolve():
-        raise RuntimeError("`input_metadata`和`output_metadata`必须在同一目录下。这是因为元数据记录的音频路径是相对路径，不能只移动音频文件或只移动元数据文件。")
-
     # 加载互斥标签组并转换为集合列表
     mutually_exclusive_groups = orjson.loads(args.mutually_exclusive_groups.read_bytes())
     mutually_exclusive_groups = [set(group) for group in mutually_exclusive_groups]
@@ -55,7 +51,10 @@ def main(args: argparse.Namespace):
         metadata[audio_path]["negative_prompt"] = list(negative_prompt)
 
     # 写入输出
-    args.output_metadata.write_bytes(orjson.dumps(metadata))
+    (args.input_metadata.parent / args.output_filename).write_bytes(orjson.dumps(metadata))
+
+    # 打印提示增强成功信息
+    print(f"提示词增强成功，增强后的元数据保存在 {args.output_filename}")
 
 
 if __name__ == "__main__":

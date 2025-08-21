@@ -119,6 +119,9 @@ def main(args: argparse.Namespace):
     # 将元数据写入一个文件，方便查找
     (args.output_dir / "metadata.json").write_bytes(orjson.dumps(metadata))
 
+    # 打印转换成功信息
+    print(f"Artemis 游戏提取脚本已转换为 TkTTS 通用数据集，保存在 {args.output_dir}")
+
 
 if __name__ == "__main__":
     main(parse_args())

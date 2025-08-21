@@ -273,6 +273,7 @@ def main(args: argparse.Namespace):
             character_counter[key] += counter
 
     # 打印每个标识对应的名称，以及每个名称出现的频率
+    print("提取完成，以下为游戏中出现的角色标识，以及每个角色标识对应角色名，还有角色名出现的频率:")
     for key, counter in character_counter.items():
         print(f"{key}: {counter}")
 

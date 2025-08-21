@@ -41,6 +41,9 @@ def main(args: argparse.Namespace):
     # 将合并后的元数据序列化为 JSON 并写入输出文件
     args.output_file.write_bytes(orjson.dumps(metadata))
 
+    # 打印合并成功信息
+    print(f"{len(args.datasets)} 个数据集合并成功，元数据已保存到 {args.output_file}")
+
 
 if __name__ == "__main__":
     main(parse_args())

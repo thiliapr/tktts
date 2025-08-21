@@ -118,6 +118,7 @@ def main(args: argparse.Namespace):
     character_names = set(name for result in results for name in result)
 
     # 打印角色名称
+    print("提取完成，以下为游戏中出现的角色名:")
     for name in character_names:
         print(name)
 

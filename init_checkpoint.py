@@ -144,6 +144,9 @@ def main(args: argparse.Namespace):
     # 保存为检查点
     save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), metrics, generation_config, tag_label_encoder)
 
+    # 打印初始化成功信息
+    print(f"检查点初始化成功，已保存到 {args.ckpt_path}")
+
 
 if __name__ == "__main__":
     main(parse_args())

@@ -101,7 +101,7 @@ def main(args: argparse.Namespace):
 
     # 保存为音频
     soundfile.write(args.output_path, audio, extra_config["sample_rate"])
-    print(f"音频文件已保存到 {args.output_path}")
+    print(f"生成完成，音频文件已保存到 {args.output_path}")
 
 
 if __name__ == "__main__":
