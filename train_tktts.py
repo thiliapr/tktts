@@ -603,12 +603,12 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train_loss = train(model, train_loader, optimizer, scaler, accumulation_steps=args.accumulation_steps, device=device)
+        train_loss = train(model, train_loader, optimizer, scaler, args.duration_weight, accumulation_steps=args.accumulation_steps, device=device)
 
         # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
         if args.val_dataset:
             val_sampler.set_epoch(current_epoch)
-            val_loss = validate(model, val_loader, device)
+            val_loss = validate(model, val_loader, args.duration_weight, device)
         else:
             val_loss = [float("nan")]
 
