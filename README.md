@@ -120,6 +120,27 @@ python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/
 > [!TIP]
 > 这个步骤可以运用在通用训练集和快速训练数据集。
 
+### 可选: 切割数据集
+你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
+```bash
+python split_dataset.py /path/to/dataset/metadata.json train.json:9 val.json:1
+```
+这样，你的`/path/to/dataset`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`。
+> [!TIP]
+> 这个步骤可以运用在通用训练集和快速训练数据集。
+> 比如说你可以先在通用数据集划分出训练集和验证集，然后再准备快速训练数据集；或者先准备快速训练数据集，然后在快速训练数据集，然后再划分训练集和验证集。
+
+### 训练分词器
+```bash
+python train_tokenizer.py /path/to/ckpt -t /path/to/dataset/train.json -v /path/to/dataset/val.json
+```
+
+### 初始化检查点
+```bash
+python list_tags_from_datasets.py /path/to/dataset/train.json -o /path/to/tags.txt
+python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
+```
+
 ### 将通用数据集转化为快速训练数据集
 由于直接训练时加载音频数据十分缓慢，不能发挥 GPU 训练的快的优势，所以这里我们采用：将训练数据预处理缓存在硬盘，在训练时直接加载而无需处理的方法，加快数据加载速度。
 
@@ -143,27 +164,6 @@ python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/
 python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset
 ```
 新的元数据将会在`/path/to/fast_dataset/metadata.json`
-
-### 可选: 切割数据集
-你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
-```bash
-python split_dataset.py /path/to/dataset/metadata.json train.json:9 val.json:1
-```
-这样，你的`/path/to/dataset`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`。
-> [!TIP]
-> 这个步骤可以运用在通用训练集和快速训练数据集。
-> 比如说你可以先在通用数据集划分出训练集和验证集，然后再准备快速训练数据集；或者先准备快速训练数据集，然后在快速训练数据集，然后再划分训练集和验证集。
-
-### 训练分词器
-```bash
-python train_tokenizer.py /path/to/ckpt -t /path/to/dataset/train.json -v /path/to/dataset/val.json
-```
-
-### 初始化检查点
-```bash
-python list_tags_from_datasets.py /path/to/dataset/train.json -o /path/to/tags.txt
-python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
-```
 
 ### 训练模型
 ```bash
