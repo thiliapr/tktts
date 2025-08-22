@@ -13,7 +13,7 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from utils.checkpoint import TagLabelEncoder, load_checkpoint
-from utils.dataset import AudioMetadata
+from utils.dataset import AudioMetadata, FastAudioMetadata
 from utils.tookit import parallel_map
 
 
@@ -31,7 +31,7 @@ def convert_and_save(
     win_length: int,
     hop_length: int,
     num_mels: int,
-) -> dict[str, dict[str, list[int]]]:
+) -> list[FastAudioMetadata]:
     """
     音频数据处理与特征提取管道，将原始音频转换为训练所需的特征格式并保存
 
@@ -203,7 +203,7 @@ def main(args: argparse.Namespace):
     ])
 
     # 合并元数据
-    processed_metadata = {k: v for worker_metadata in results for k, v in worker_metadata.items()}
+    processed_metadata = [audio_metadata for worker_metadata in results for audio_metadata in worker_metadata]
 
     # 保存到输出路径
     (args.output_dir / args.metadata_filename).write_bytes(orjson.dumps(processed_metadata))
