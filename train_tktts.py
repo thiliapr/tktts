@@ -11,6 +11,7 @@ from typing import Optional
 from collections.abc import Iterator
 import librosa
 import orjson
+from regex import R
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -245,51 +246,55 @@ def fastspeech2_loss(
     energy_target: torch.Tensor,
 ) -> torch.Tensor:
     """
-    计算 FastSpeech2 模型的复合损失函数，包含音频、时长、音高和能量四个损失分量。
-    
-    该函数首先根据预测的时长生成填充掩码，然后分别计算：
-    1. 预测音频与目标音频的L1损失
-    2. 预测时长总和与目标时长的L1损失
-    3. 预测音高与目标音高的L1损失
-    4. 预测能量与目标能量的L1损失
-    所有损失计算时都会考虑有效区域（非填充部分）的掩码处理。
+    计算 FastSpeech2 模型的复合损失函数，包含音频重建、时长、音高和能量损失。
 
-    工作流程：
-    1. 根据 duration_pred 生成填充掩码，标记有效音频帧
-    2. 计算各分量的损失，仅对有效区域求平均
-    3. 返回四个损失分量的加权和（当前为简单相加）
+    通过生成掩码来识别有效音频帧，分别计算各分量的L1损失，并对有效区域求平均。
+    时长损失使用总时长比较，其他损失使用逐帧掩码计算，最后返回加权和。
 
     Args:
-        audio_pred: 模型预测的音频特征，形状为 [batch_size, max_frames, feature_dim]
-        duration_pred: 预测的音素持续时间，形状为 [batch_size, num_phonemes]
-        pitch_pred: 预测的音高特征，形状为 [batch_size, max_frames]
-        energy_pred: 预测的能量特征，形状为 [batch_size, max_frames]
-        audio_target: 目标音频特征，形状为 [batch_size, max_frames, feature_dim]
-        duration_sum_target: 目标总帧数，形状为 [batch_size]
-        pitch_target: 目标音高特征，形状为 [batch_size, max_frames]
-        energy_target: 目标能量特征，形状为 [batch_size, max_frames]
+        audio_pred: 预测的梅尔频谱图，形状为 [batch_size, seq_len, mel_dim]
+        duration_pred: 预测的音素时长，形状为 [batch_size, phoneme_len]
+        pitch_pred: 预测的音高特征，形状为 [batch_size, seq_len]
+        energy_pred: 预测的能量特征，形状为 [batch_size, seq_len]
+        audio_target: 真实的梅尔频谱图，形状为 [batch_size, seq_len, mel_dim]
+        duration_sum_target: 真实的总时长，形状为 [batch_size]
+        pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
+        energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
 
     Returns:
-        包含所有损失分量的标量张量
+        组合损失值，标量张量
     """
-    # 生成填充掩码，标记无效音频帧 [batch_size, max_frames]
-    truncated_len = min(audio_pred.size(1), audio_target.size(1))
-    frame_indices = torch.arange(truncated_len, device=audio_pred.device).unsqueeze(0)
-    audio_mask = frame_indices >= duration_pred.sum(dim=1).ceil().unsqueeze(1)
-
-    # 计算各分量的有效区域损失
-    def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor):
+    def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor):
         "计算掩码区域的L1损失，仅对有效帧求平均"
-        loss = F.l1_loss(pred[:, :truncated_len], target[:, :truncated_len], reduction="none")
-        return loss.masked_fill(audio_mask.unsqueeze(-1), 0).sum() / (~audio_mask).sum()
+        # 计算逐元素L1损失 [batch_size, seq_len, ...]
+        elementwise_loss = F.l1_loss(pred, target, reduction="none")
 
-    # 计算时长总和损失
+        # 重塑损失张量以便统一 duration/pitch/energy 和 mel 掩码应用逻辑
+        # [batch_size, seq_len, feature_dim]，其中 feature_dim 可能为 1 或 dim_model
+        loss_reshaped = elementwise_loss.view(*elementwise_loss.shape[:2], -1)
+
+        # 扩展掩码以匹配损失张量的形状
+        expanded_mask = padding_mask.unsqueeze(2).expand_as(loss_reshaped)
+
+        # 将填充区域的损失置零
+        maksed_loss = loss_reshaped.masked_fill(expanded_mask, 0)
+
+        # 计算损失平均值
+        return maksed_loss.sum() / (~expanded_mask).sum()
+
+    # 标记超出有效时长的填充帧 [batch_size, max_frames]
+    frame_indices = torch.arange(audio_pred.size(1), device=audio_pred.device).unsqueeze(0)  # [1, max_frames]
+    audio_padding_mask = frame_indices >= duration_pred.sum(dim=1).ceil().unsqueeze(1)  # [batch_size, max_frames]
+
+    # 计算总时长损失
+    # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
+    # 所以 duration_pred.sum(dim=1) 已经是去除了填充部分的总和
     duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target)
 
-    # 计算有效区域的平均损失
-    audio_loss = masked_l1_loss(audio_pred, audio_target)
-    pitch_loss = masked_l1_loss(pitch_pred, pitch_target)
-    energy_loss = masked_l1_loss(energy_pred, energy_target)
+    # 计算各分量损失
+    audio_loss = masked_l1_loss(audio_pred, audio_target, audio_padding_mask)
+    pitch_loss = masked_l1_loss(pitch_pred, pitch_target, audio_padding_mask)
+    energy_loss = masked_l1_loss(energy_pred, energy_target, audio_padding_mask)
 
     # 返回组合损失
     return audio_loss + duration_loss + pitch_loss + energy_loss
@@ -309,13 +314,13 @@ def train(
     函数执行流程：
     1. 设置模型为训练模式，初始化梯度缩放器和训练监控工具
     2. 遍历数据加载器中的每个批次
-    3. 生成文本和组合谱图的padding mask
+    3. 生成文本和组合谱图的 padding mask
     4. 在混合精度环境下计算模型输出和损失
     5. 执行梯度反向传播和参数更新（根据累积步数）
     6. 记录并返回训练过程中的损失值
 
     Args:
-        model: 待训练的TkTTS模型实例
+        model: 待训练的 TkTTS 模型实例
         dataloader: 训练数据加载器
         optimizer: 模型优化器
         scaler: 混合精度梯度缩放器
@@ -357,7 +362,7 @@ def train(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
+            audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, audio_length, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
             loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy)  # 计算损失
 
         # 梯度缩放与反向传播
@@ -403,8 +408,22 @@ def validate(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask)  # 模型前向传播（不使用教师强制）
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy)  # 计算损失
+            # 模型前向传播（不使用教师强制）
+            audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask)
+
+            # 填充序列，方便计算损失
+            batch_size, audio_pred_len, num_mels = audio_pred.size()
+            audio_target_len = padded_audio.size(1)
+            max_len = max(audio_pred_len, audio_target_len)
+            audio_pred = torch.cat([audio_pred, torch.zeros(batch_size, max_len - audio_pred_len, num_mels, device=audio_pred.device)], dim=1)
+            pitch_pred = torch.cat([pitch_pred, torch.zeros(batch_size, max_len - audio_pred_len, device=audio_pred.device)], dim=1)
+            energy_pred = torch.cat([energy_pred, torch.zeros(batch_size, max_len - audio_pred_len, device=audio_pred.device)], dim=1)
+            padded_audio = torch.cat([padded_audio, torch.zeros(batch_size, max_len - audio_target_len, num_mels, device=audio_pred.device)], dim=1)
+            padded_pitch = torch.cat([padded_pitch, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
+            padded_energy = torch.cat([padded_energy, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
+
+            # 计算损失
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy)
 
         # 记录损失
         losses.append(loss.item())

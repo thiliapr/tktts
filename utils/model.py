@@ -379,6 +379,7 @@ class DifferentiableLengthRegulator(nn.Module):
     Inputs:
         features: 输入特征序列 [batch_size, seq_len, feature_dim]
         durations: 每个特征的持续时间 [batch_size, seq_len]
+        padding_mask: 填充掩码，形状为 [batch_size, seq_len]，填充位置为 True，非填充位置为 False。
 
     Outputs:
         扩展后的特征序列 [batch_size, total_frames, feature_dim]
@@ -388,7 +389,7 @@ class DifferentiableLengthRegulator(nn.Module):
         super().__init__()
         self.temperature = temperature
         
-    def forward(self, features, durations):
+    def forward(self, features: torch.Tensor, durations: torch.Tensor, padding_mask: torch.BoolTensor):
         # 计算每个时间步的累积持续时间 [batch_size, seq_len]
         cum_durations = torch.cumsum(durations, dim=1)
 
@@ -403,9 +404,14 @@ class DifferentiableLengthRegulator(nn.Module):
         # 使用广播机制自动扩展维度
         frame_distances = frame_centers[:, :, None] - cum_durations[:, None, :]
 
+        # 计算权重，使用温度参数控制分布形状 [batch_size, total_frames, seq_len]
+        logits = -torch.abs(frame_distances) / self.temperature
+
+        # 应用填充掩码
+        logits.masked_fill_(padding_mask[:, None, :].expand_as(logits), -torch.inf)
+
         # 计算归一化权重 [batch_size, total_frames, seq_len]
-        # 使用温度参数控制分布形状
-        weights = torch.softmax(-torch.abs(frame_distances) / self.temperature, dim=-1)
+        weights = torch.softmax(logits, dim=-1)
 
         # 通过加权求和扩展特征 [batch_size, total_frames, feature_dim]
         expanded_features = torch.einsum("btl,bld->btd", weights, features)
@@ -468,6 +474,7 @@ class FastSpeech2(nn.Module):
         positive_prompt: 可选的标签列表，每个标签是一个整数列表。len(positive_prompt) 应等于 batch_size，每个标签列表的长度可以不同。
         negative_prompt: 可选的负面标签列表，格式同 positive_prompt。
         text_padding_mask: 可选的文本填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False。
+        duration_sum_target: 可选的总时长目标张量，形状为 (batch_size)。
         pitch_target: 可选的音高目标张量，形状为 (batch_size, seq_len)。
         energy_target: 可选的能量目标张量，形状为 (batch_size, seq_len)。
 
@@ -514,6 +521,7 @@ class FastSpeech2(nn.Module):
         positive_prompt: Optional[list[list[int]]] = None,
         negative_prompt: Optional[list[list[int]]] = None,
         text_padding_mask: Optional[torch.BoolTensor] = None,
+        duration_sum_target: Optional[torch.Tensor] = None,
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -545,30 +553,33 @@ class FastSpeech2(nn.Module):
         # 预测时长
         duration_prediction = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
 
-        # 防止时长为零
-        duration_prediction = duration_prediction.clamp(min=0)
+        # 对时长应用填充掩码
+        duration_prediction.masked_fill_(text_padding_mask, 0)
+
+        # 防止时长小于零
+        duration = duration_prediction.clamp(min=0)
+
+        # 调节时长，使其总和与目标值相同
+        if duration_sum_target is not None:
+            duration, duration_sum_target = duration.float(), duration_sum_target.float()  # 转化为 float，避免精度丢失导致后面计算 duration_pred_sum != duration_sum_target
+            duration *= (duration_sum_target.unsqueeze(1) / duration.sum(dim=1, keepdim=True))  # 计算缩放，使 duration_pred_sum 等于 duration_sum_target
+            duration -= 0.7 / duration.size(1)  # 减去微小值避免 duration.sum(dim=1).ceil() != duration_sum_target
+            duration = duration.to(dtype=x.dtype)  # 转换回原来精度
 
         # 长度调节
-        x = self.length_regulator(x, duration_prediction)  # [batch_size, dim_model, audio_len]
-
-        # 获取截断长度，因为多余的序列没有目标值，无法训练
-        if pitch_target is None:
-            truncated_len = x.size(1)
-        else:
-            truncated_len = min(x.size(1), pitch_target.size(1))
-        x = x[:, :truncated_len]
+        x = self.length_regulator(x, duration, text_padding_mask)  # [batch_size, dim_model, audio_len]
 
         # 生成音频填充掩码
-        audio_padding_mask = duration_prediction.ceil().sum(dim=1).unsqueeze(1) <= torch.arange(x.size(1), device=x.device).unsqueeze(0)  # [batch_size, audio_len]
+        audio_padding_mask = duration.sum(dim=1).ceil().unsqueeze(1) <= torch.arange(x.size(1), device=x.device).unsqueeze(0)  # [batch_size, audio_len]
 
         # 预测音高和能量
         pitch_prediction = self.pitch_predictor(x, audio_padding_mask)  # [batch_size, text_len]
         energy_prediction = self.energy_predictor(x, audio_padding_mask)  # [batch_size, audio_len]
 
         # 使用目标值替代预测值（如果提供）
-        # 这是为了在训练时使用真实值进行长度调节（即教师强制），然后返回预测值以进行损失计算
-        pitch = pitch_prediction if pitch_target is None else pitch_target[:, :truncated_len]
-        energy = energy_prediction if energy_target is None else energy_target[:, :truncated_len]
+        # 这是为了在训练时使用真实值进行音高、调节（即教师强制），然后返回预测值以进行损失计算
+        pitch = pitch_prediction if pitch_target is None else pitch_target
+        energy = energy_prediction if energy_target is None else energy_target
 
         # 确保音高、能量为非负值且整数
         pitch = pitch.to(dtype=int).clamp(min=0, max=1) * (self.variance_bins - 1)
