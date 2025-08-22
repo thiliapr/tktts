@@ -22,7 +22,7 @@ from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader
 from matplotlib import pyplot as plt
 from utils.checkpoint import TagLabelEncoder, TkTTSMetrics, load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.dataset import AudioMetadata
 from utils.model import FastSpeech2
 from utils.tookit import parallel_map
@@ -244,6 +244,7 @@ def fastspeech2_loss(
     duration_sum_target: torch.Tensor,
     pitch_target: torch.Tensor,
     energy_target: torch.Tensor,
+    duration_weight: float
 ) -> torch.Tensor:
     """
     计算 FastSpeech2 模型的复合损失函数，包含音频重建、时长、音高和能量损失。
@@ -260,6 +261,7 @@ def fastspeech2_loss(
         duration_sum_target: 真实的总时长，形状为 [batch_size]
         pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
         energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
+        duration_weight: 持续时间损失的权重系数
 
     Returns:
         组合损失值，标量张量
@@ -289,7 +291,7 @@ def fastspeech2_loss(
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
     # 所以 duration_pred.sum(dim=1) 已经是去除了填充部分的总和
-    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target)
+    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target) * duration_weight
 
     # 计算各分量损失
     audio_loss = masked_l1_loss(audio_pred, audio_target, audio_padding_mask)
@@ -306,6 +308,7 @@ def train(
     dataloader: DataLoader,
     optimizer: optim.AdamW,
     scaler: GradScaler,
+    duration_weight: float,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
 ) -> list[float]:
@@ -326,6 +329,7 @@ def train(
         optimizer: 模型优化器
         scaler: 混合精度梯度缩放器
         accumulation_steps: 梯度累积步数
+        duration_weight: 持续时间损失的权重系数
         device: 训练设备（默认使用 CPU）
 
     Returns:
@@ -364,7 +368,7 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, audio_length, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy)  # 计算损失
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, duration_weight)  # 计算损失
 
         # 梯度缩放与反向传播
         scaler.scale(loss).backward()
@@ -391,8 +395,27 @@ def train(
 def validate(
     model: FastSpeech2,
     dataloader: DataLoader,
+    duration_weight: float,
     device: torch.device = torch.device("cpu")
 ) -> list[float]:
+    """
+    在验证集上评估 FastSpeech2 模型的性能
+    计算模型在验证集上的平均损失值，用于监控训练过程和模型选择
+    整个过程使用推理模式，禁用梯度计算和自动微分以节省内存和加速计算
+
+    Args:
+        model: 要验证的FastSpeech2模型实例
+        dataloader: 验证集的数据加载器
+        duration_weight: 持续时间损失的权重系数
+        device: 计算设备，默认为CPU
+
+    Returns:
+        包含每个批次损失值的列表
+
+    Examples:
+        >>> losses = validate(model, val_loader, 1.0, torch.device("cuda"))
+        >>> avg_loss = sum(losses) / len(losses)
+    """
     # 设置模型为评估模式
     model.eval()
 
@@ -424,7 +447,7 @@ def validate(
             padded_energy = torch.cat([padded_energy, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
 
             # 计算损失
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy)
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, duration_weight)
 
         # 记录损失
         losses.append(loss.item())
@@ -526,7 +549,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
     parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
     parser.add_argument("-do", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合，默认为 %(default)s")
-    parser.add_argument("-as", "--accumulation-steps", type=int, default=4, help="梯度累积步数，默认为 %(default)s")
+    parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
+    parser.add_argument("-dw", "--duration-weight", default=DEFAULT_DUARTION_WEIGHT, type=float, help="持续时间损失的权重系数")
     parser.add_argument("-k", "--show-training-process", action="store_true", help="展示训练过程图表，而不仅仅是保存到`<ckpt_path>/statistics.png`")
     return parser.parse_args(args)
 
