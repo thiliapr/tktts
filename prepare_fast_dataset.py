@@ -146,9 +146,9 @@ def convert_and_save(
         })
 
         # 保存内容到内存
-        dataset_chunk[":".join(task_id, "mel")] = mel_spectrogram
-        dataset_chunk[":".join(task_id, "pitch")] = normalized_f0
-        dataset_chunk[":".join(task_id, "energy")] = normalized_energy
+        dataset_chunk[f"{task_id}:mel"] = mel_spectrogram
+        dataset_chunk[f"{task_id}:pitch"] = normalized_f0
+        dataset_chunk[f"{task_id}:energy"] = normalized_energy
 
         # 将内容分块写入文件
         if task_id % audio_per_chunk == audio_per_chunk - 1:

@@ -64,13 +64,14 @@ class TkTTSDataset(Dataset):
                 loaded_chunks[chunk_file] = np.load(working_dir / chunk_file)
 
             # 添加音频元数据信息和音频到列表
+            audio_id = audio_metadata["audio_id"]
             self.data_samples.append((
                 audio_metadata["text"],
                 audio_metadata["positive_prompt"],
                 audio_metadata["negative_prompt"],
-                loaded_chunks[chunk_file][":".join(audio_metadata["audio_id"], "mel")],
-                loaded_chunks[chunk_file][":".join(audio_metadata["audio_id"], "pitch")],
-                loaded_chunks[chunk_file][":".join(audio_metadata["audio_id"], "energy")]
+                loaded_chunks[chunk_file][f"{audio_id}:mel"],
+                loaded_chunks[chunk_file][f"{audio_id}:pitch"],
+                loaded_chunks[chunk_file][f"{audio_id}:energy"]
             ))
 
     def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:
