@@ -20,7 +20,6 @@ from utils.tookit import parallel_map
 def convert_and_save(
     rank: int,
     metadata: list[tuple[pathlib.Path, AudioMetadata]],
-    root_dir: pathlib.Path,
     output_dir: pathlib.Path,
     tokenizer: AutoTokenizer,
     tag_label_encoder: TagLabelEncoder,
@@ -47,7 +46,6 @@ def convert_and_save(
     Args:
         rank: 当前进程的排名（用于分布式训练）
         metadata: 音频文件路径和对应元数据的列表
-        root_dir: 原始音频文件的根目录
         output_dir: 处理后的特征文件输出目录
         tokenizer: 用于文本编码的分词器
         tag_label_encoder: 用于标签编码的编码器
@@ -61,11 +59,12 @@ def convert_and_save(
     Returns:
         包含所有处理文件元数据的字典
     """
-    # 初始化训练数据集元数据字典
-    train_dataset_metadata = {}
+    # 初始化数据集元数据、内容分块
+    dataset_metadata = []
+    dataset_chunk = {}
 
     # 仅在主进程中显示进度条
-    for audio_path, audio_metadata in tqdm(metadata, disable=rank != 0):
+    for task_id, (audio_path, audio_metadata) in enumerate(tqdm(metadata, disable=rank != 0)):
         # 使用分词器将文本转换为序列 ID
         text_sequences = tokenizer.encode(audio_metadata["text"])
 
@@ -131,21 +130,23 @@ def convert_and_save(
         normalized_f0 = normalized_f0.astype(np.float32)
         normalized_energy = normalized_energy.astype(np.float32)
 
-        # 创建输出文件路径（保持原始目录结构）
-        relative_output_path = audio_path.relative_to(root_dir).with_suffix(".npz")
-        absolute_output_path = output_dir / relative_output_path
-        absolute_output_path.parent.mkdir(parents=True, exist_ok=True)
-
         # 保存元数据信息
-        train_dataset_metadata[relative_output_path.as_posix()] = {
+        dataset_metadata.append({
             "text": text_sequences,
             "positive_prompt": positive_prompt,
             "negative_prompt": negative_prompt,
-        }
+            "rank": rank,
+            "audio_id": task_id
+        })
 
-        # 将特征保存为压缩的 NPZ 文件
-        np.savez_compressed(absolute_output_path, mel=mel_spectrogram, pitch=normalized_f0, energy=normalized_energy)
-    return train_dataset_metadata
+        # 保存内容
+        dataset_chunk[":".join(task_id, "mel")] = mel_spectrogram
+        dataset_chunk[":".join(task_id, "pitch")] = normalized_f0
+        dataset_chunk[":".join(task_id, "energy")] = normalized_energy
+
+    # 将内容分块写入文件
+    np.savez_compressed(output_dir / f"dataset-{rank}.npz", **dataset_chunk)
+    return dataset_metadata
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
@@ -182,7 +183,7 @@ def main(args: argparse.Namespace):
 
     # 并行转换数据
     results = parallel_map(convert_and_save, [
-        (rank, metadata[rank::args.num_workers], args.dataset_metadata.parent, args.output_dir, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["frame_length"], extra_config["win_length"], extra_config["hop_length"], model_config.num_mels)
+        (rank, metadata[rank::args.num_workers], args.output_dir, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["frame_length"], extra_config["win_length"], extra_config["hop_length"], model_config.num_mels)
         for rank in range(args.num_workers)
     ])
 

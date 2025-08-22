@@ -38,14 +38,6 @@ class TkTTSDataset(Dataset):
 
     Args:
         metadata_files: 元数据文件列表
-        tokenizer: 用于文本编码的预训练分词器
-        tag_label_encoder: 标签编码器
-        sample_rate: 音频采样率（Hz）
-        fft_length: FFT窗口长度
-        frame_length: YIN 算法的分析帧长度
-        hop_length: 帧移长度
-        win_length: 窗函数长度
-        num_mels: 梅尔频率倒谱系数数量
 
     Yields:
         - 分词后的文本ID序列
@@ -57,20 +49,29 @@ class TkTTSDataset(Dataset):
     """
 
     def __init__(self, metadata_files: list[pathlib.Path]):
-        # 初始化数据列表
-        self.data_samples = []
+        self.data_samples = {}
 
         # 获取所有元数据和音频并加入数据列表
-        for audio_path, audio_metadata in tqdm([
-            (metadata_file.parent / audio_path, audio_metadata)
+        loaded_chunks = {}
+        for working_dir, audio_metadata in tqdm([
+            (metadata_file.parent, audio_metadata)
             for metadata_file in metadata_files
-            for audio_path, audio_metadata in orjson.loads(metadata_file.read_bytes()).items()
+            for audio_metadata in orjson.loads(metadata_file.read_bytes())
         ]):
-            # 加载音频信息（梅尔频谱、音高、能量）
-            audio = np.load(audio_path)
+            # 加载音频内容分块
+            rank = audio_metadata["rank"]
+            if rank not in loaded_chunks:
+                loaded_chunks[rank] = np.load(working_dir / f"dataset-{rank}.npz")
 
             # 添加音频元数据信息和音频到列表
-            self.data_samples.append((audio_metadata["text"], audio_metadata["positive_prompt"], audio_metadata["negative_prompt"], audio["mel"], audio["pitch"], audio["energy"]))
+            self.data_samples.append((
+                audio_metadata["text"],
+                audio_metadata["positive_prompt"],
+                audio_metadata["negative_prompt"],
+                loaded_chunks[rank][":".join(audio_metadata["audio_id"], "mel")],
+                loaded_chunks[rank][":".join(audio_metadata["audio_id"], "pitch")],
+                loaded_chunks[rank][":".join(audio_metadata["audio_id"], "energy")]
+            ))
 
     def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:
         return self.data_samples[index]
