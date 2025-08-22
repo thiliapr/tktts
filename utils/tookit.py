@@ -95,7 +95,7 @@ def parallel_map(func: Callable[..., T], args: list[tuple]) -> list[T]:
     """
     # 单进程时直接执行函数而不创建子进程
     if len(args) == 1:
-        return func(*args[0])
+        return [func(*args[0])]
 
     from multiprocessing import Pool
     with Pool(processes=len(args)) as pool:
