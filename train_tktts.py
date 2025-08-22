@@ -59,18 +59,18 @@ class TkTTSDataset(Dataset):
             for audio_metadata in orjson.loads(metadata_file.read_bytes())
         ]):
             # 加载音频内容分块
-            rank = audio_metadata["rank"]
-            if rank not in loaded_chunks:
-                loaded_chunks[rank] = np.load(working_dir / f"dataset-{rank}.npz")
+            chunk_file = audio_metadata["filename"]
+            if chunk_file not in loaded_chunks:
+                loaded_chunks[chunk_file] = np.load(working_dir / chunk_file)
 
             # 添加音频元数据信息和音频到列表
             self.data_samples.append((
                 audio_metadata["text"],
                 audio_metadata["positive_prompt"],
                 audio_metadata["negative_prompt"],
-                loaded_chunks[rank][":".join(audio_metadata["audio_id"], "mel")],
-                loaded_chunks[rank][":".join(audio_metadata["audio_id"], "pitch")],
-                loaded_chunks[rank][":".join(audio_metadata["audio_id"], "energy")]
+                loaded_chunks[chunk_file][":".join(audio_metadata["audio_id"], "mel")],
+                loaded_chunks[chunk_file][":".join(audio_metadata["audio_id"], "pitch")],
+                loaded_chunks[chunk_file][":".join(audio_metadata["audio_id"], "energy")]
             ))
 
     def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:

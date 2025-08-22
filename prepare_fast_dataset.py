@@ -21,6 +21,8 @@ def convert_and_save(
     rank: int,
     metadata: list[tuple[pathlib.Path, AudioMetadata]],
     output_dir: pathlib.Path,
+    num_chunks: int,
+    prefix: str,
     tokenizer: AutoTokenizer,
     tag_label_encoder: TagLabelEncoder,
     sample_rate: int,
@@ -47,6 +49,8 @@ def convert_and_save(
         rank: 当前进程的排名（用于分布式训练）
         metadata: 音频文件路径和对应元数据的列表
         output_dir: 处理后的特征文件输出目录
+        num_chunks: 音频特征分块数量
+        prefix: 音频特征内容分块文件名前缀
         tokenizer: 用于文本编码的分词器
         tag_label_encoder: 用于标签编码的编码器
         sample_rate: 目标采样率
@@ -64,6 +68,7 @@ def convert_and_save(
     dataset_chunk = {}
 
     # 仅在主进程中显示进度条
+    audio_per_chunk = len(metadata) // num_chunks
     for task_id, (audio_path, audio_metadata) in enumerate(tqdm(metadata, disable=rank != 0)):
         # 使用分词器将文本转换为序列 ID
         text_sequences = tokenizer.encode(audio_metadata["text"])
@@ -131,21 +136,29 @@ def convert_and_save(
         normalized_energy = normalized_energy.astype(np.float32)
 
         # 保存元数据信息
+        filename = f"{prefix}-{rank}-{task_id // audio_per_chunk}.npz"
         dataset_metadata.append({
             "text": text_sequences,
             "positive_prompt": positive_prompt,
             "negative_prompt": negative_prompt,
-            "rank": rank,
+            "filename": filename,
             "audio_id": task_id
         })
 
-        # 保存内容
+        # 保存内容到内存
         dataset_chunk[":".join(task_id, "mel")] = mel_spectrogram
         dataset_chunk[":".join(task_id, "pitch")] = normalized_f0
         dataset_chunk[":".join(task_id, "energy")] = normalized_energy
 
-    # 将内容分块写入文件
-    np.savez_compressed(output_dir / f"dataset-{rank}.npz", **dataset_chunk)
+        # 将内容分块写入文件
+        if task_id % audio_per_chunk == audio_per_chunk - 1:
+            np.savez_compressed(output_dir / filename, **dataset_chunk)
+            dataset_chunk.clear()
+    
+    # 把剩余部分写入文件
+    if dataset_chunk:
+        np.savez_compressed(output_dir / filename, **dataset_chunk)
+
     return dataset_metadata
 
 
@@ -164,7 +177,9 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("ckpt_path", type=pathlib.Path, help="目标检查点文件的完整路径。数据集将根据此检查点的配置参数（如分词器、采样率等）进行适配准备")
     parser.add_argument("output_dir", type=pathlib.Path, help="处理后的特征数据集输出目录路径。所有提取的音频特征和转换后的文本序列将保存在此目录中")
     parser.add_argument("-f", "--metadata-filename", type=str, default="metadata.json", help="处理后的特征数据集的元数据文件名，默认为 %(default)s")
-    parser.add_argument("-n", "--num-workers", type=int, default=os.cpu_count(), help="并行处理任务的工作进程数量。默认值为当前系统的 CPU 核心数 %(default)s")
+    parser.add_argument("-p", "--prefix", type=str, default="dataset", help="音频特征内容分块文件名前缀，文件名格式为`<prefix>-<rank>-<chunk_id>.npz`，默认为 %(default)s")
+    parser.add_argument("-nw", "--num-workers", type=int, default=os.cpu_count(), help="并行处理任务的工作进程数量。默认值为当前系统的 CPU 核心数 %(default)s")
+    parser.add_argument("-nc", "--num-chunks", type=int, default=1, help="每个进程输出音频特征分块数量，实际数据集分块数量为`num_workers * num_chunks`。分块数量越多，运行该脚本的内存占用越少，处理后数据集硬盘空间占用越多，训练时加载时间越长。默认为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -183,7 +198,7 @@ def main(args: argparse.Namespace):
 
     # 并行转换数据
     results = parallel_map(convert_and_save, [
-        (rank, metadata[rank::args.num_workers], args.output_dir, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["frame_length"], extra_config["win_length"], extra_config["hop_length"], model_config.num_mels)
+        (rank, metadata[rank::args.num_workers], args.output_dir, args.num_chunks, args.prefix, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["frame_length"], extra_config["win_length"], extra_config["hop_length"], model_config.num_mels)
         for rank in range(args.num_workers)
     ])
 
