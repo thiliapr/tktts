@@ -57,7 +57,7 @@ class TkTTSDataset(Dataset):
             (metadata_file.parent, audio_metadata)
             for metadata_file in metadata_files
             for audio_metadata in orjson.loads(metadata_file.read_bytes())
-        ])   , range(100)):
+        ])   , range(100)):  # the zip() is debug option
             # 加载音频内容分块
             chunk_file = audio_metadata["filename"]
             if chunk_file not in loaded_chunks:
@@ -363,10 +363,6 @@ def train(
 
         # 准备文本掩码
         text_padding_mask = torch.arange(padded_text.size(1), device=padded_text.device).unsqueeze(0) >= text_length.unsqueeze(1)
-
-        # debug
-        if audio_length.size(0) != text_length.size(0):
-            print("\nerror at:", audio_length.shape, "", text_length.shape)
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
