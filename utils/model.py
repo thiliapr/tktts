@@ -530,6 +530,11 @@ class FastSpeech2(nn.Module):
         if text_padding_mask is None:
             text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
 
+        # debug info
+        print(f"\n{text.shape=}")
+        print(f"{duration_sum_target.shape=}")
+        print(f"{pitch_target.shape=}")
+
         # 词嵌入
         x = self.embedding(text) * math.sqrt(self.dim_model)
 
