@@ -9,23 +9,18 @@ import random
 import os
 from typing import Optional
 from collections.abc import Iterator
-import librosa
 import orjson
-from regex import R
 import torch
 import numpy as np
 from tqdm import tqdm
-from transformers import AutoTokenizer
 from torch import nn, optim
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader
 from matplotlib import pyplot as plt
-from utils.checkpoint import TagLabelEncoder, TkTTSMetrics, load_checkpoint_train, save_checkpoint
+from utils.checkpoint import TkTTSMetrics, load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
-from utils.dataset import AudioMetadata
 from utils.model import FastSpeech2
-from utils.tookit import parallel_map
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())

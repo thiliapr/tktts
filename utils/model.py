@@ -533,9 +533,6 @@ class FastSpeech2(nn.Module):
         # 词嵌入
         x = self.embedding(text) * math.sqrt(self.dim_model)
 
-        # debug
-        print("\nx.shape:", x.shape)
-
         # 标签嵌入
         if positive_prompt:
             tag_batch = pad_sequence([torch.tensor(t, dtype=int, device=x.device) for t in positive_prompt], batch_first=True, padding_value=0)
