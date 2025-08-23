@@ -48,11 +48,11 @@ class TkTTSDataset(Dataset):
 
         # 获取所有元数据和音频并加入数据列表
         loaded_chunks = {}
-        for (working_dir, audio_metadata), _ in zip(   tqdm([
+        for working_dir, audio_metadata in tqdm([
             (metadata_file.parent, audio_metadata)
             for metadata_file in metadata_files
             for audio_metadata in orjson.loads(metadata_file.read_bytes())
-        ])   , range(100)):  # the zip() is debug option
+        ]):
             # 加载音频内容分块
             chunk_file = audio_metadata["filename"]
             if chunk_file not in loaded_chunks:
