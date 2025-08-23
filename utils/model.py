@@ -548,6 +548,7 @@ class FastSpeech2(nn.Module):
             x = x - (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
 
         # 编码器
+        print("[before encoder] x.shape:", x.shape)
         for layer in self.encoder:
             x = layer(x, text_padding_mask)
 
@@ -571,7 +572,9 @@ class FastSpeech2(nn.Module):
             duration = duration.to(dtype=x.dtype)  # 转换回原来精度
 
         # 长度调节
+        print("[before lr] x.shape:", x.shape)
         x = self.length_regulator(x, duration, text_padding_mask)  # [batch_size, dim_model, audio_len]
+        print("[after lr] x.shape:", x.shape)
 
         # 生成音频填充掩码
         audio_padding_mask = duration.sum(dim=1).ceil().unsqueeze(1) <= torch.arange(x.size(1), device=x.device).unsqueeze(0)  # [batch_size, audio_len]
