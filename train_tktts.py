@@ -49,7 +49,7 @@ class TkTTSDataset(Dataset):
     """
 
     def __init__(self, metadata_files: list[pathlib.Path]):
-        self.data_samples = {}
+        self.data_samples = []
 
         # 获取所有元数据和音频并加入数据列表
         loaded_chunks = {}
