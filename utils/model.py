@@ -557,7 +557,7 @@ class FastSpeech2(nn.Module):
         duration_prediction.masked_fill_(text_padding_mask, 0)
 
         # 防止时长小于零
-        duration = duration_prediction.clamp(min=0)
+        duration = duration_prediction = duration_prediction.clamp(min=0)
 
         # 调节时长，使其总和与目标值相同
         if duration_sum_target is not None:
