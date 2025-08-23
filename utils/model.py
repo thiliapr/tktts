@@ -548,7 +548,6 @@ class FastSpeech2(nn.Module):
             x = x - (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
 
         # 编码器
-        print("[before encoder] x.shape:", x.shape)
         for layer in self.encoder:
             x = layer(x, text_padding_mask)
 
@@ -572,9 +571,7 @@ class FastSpeech2(nn.Module):
             duration = duration.to(dtype=x.dtype)  # 转换回原来精度
 
         # 长度调节
-        print("[before lr] x.shape:", x.shape)
         x = self.length_regulator(x, duration, text_padding_mask)  # [batch_size, dim_model, audio_len]
-        print("[after lr] x.shape:", x.shape)
 
         # 生成音频填充掩码
         audio_padding_mask = duration.sum(dim=1).ceil().unsqueeze(1) <= torch.arange(x.size(1), device=x.device).unsqueeze(0)  # [batch_size, audio_len]
@@ -591,14 +588,6 @@ class FastSpeech2(nn.Module):
         # 确保音高、能量为非负值且整数
         pitch = pitch.to(dtype=int).clamp(min=0, max=1) * (self.variance_bins - 1)
         energy = energy.to(dtype=int).clamp(min=0, max=1) * (self.variance_bins - 1)
-
-        # debug
-        if pitch.size(1) != x.size(1):
-            print("ad:", duration)
-            print("ad_sum:", duration.sum(dim=1))
-            print("ds_target:", duration_sum_target)
-            print("pitch.shape:", pitch.shape)
-            print("x.shape:", x.shape)
 
         # 将音高和能量作为附加特征添加到编码器输出中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)

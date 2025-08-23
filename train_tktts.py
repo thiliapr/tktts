@@ -359,6 +359,13 @@ def train(
         # 准备文本掩码
         text_padding_mask = torch.arange(padded_text.size(1), device=padded_text.device).unsqueeze(0) >= text_length.unsqueeze(1)
 
+        # get debug info
+        print("\npadded_text.shape:", padded_text.shape)
+        print("padded_audio.shape:", padded_audio.shape)
+        print("padded_pitch.shape:", padded_pitch.shape)
+        print("text_length:", text_length)
+        print("audio_length:", audio_length)
+
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, audio_length, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
