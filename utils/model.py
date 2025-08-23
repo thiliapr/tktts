@@ -559,6 +559,10 @@ class FastSpeech2(nn.Module):
         # 防止时长小于零
         duration = duration_prediction = duration_prediction.clamp(min=0)
 
+        # debug info
+        print("d_pred:", duration_prediction)
+        print("d_sum:", duration_prediction.sum(dim=1))
+
         # 调节时长，使其总和与目标值相同
         if duration_sum_target is not None:
             duration, duration_sum_target = duration.float(), duration_sum_target.float()  # 转化为 float，避免精度丢失导致后面计算 duration_pred_sum != duration_sum_target
