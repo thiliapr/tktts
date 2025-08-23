@@ -565,8 +565,8 @@ def main(args: argparse.Namespace):
     model = model.to(device)
 
     # 多 GPU 时使用 DataParallel 包装模型
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
+    # if torch.cuda.device_count() > 1:
+    #     model = nn.DataParallel(model)
 
     # 创建优化器并加载状态
     optimizer = optim.AdamW(model.parameters())
