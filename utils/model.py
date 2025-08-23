@@ -479,11 +479,12 @@ class FastSpeech2(nn.Module):
         energy_target: 可选的能量目标张量，形状为 (batch_size, seq_len)。
 
     Outputs:
-        返回一个元组，包含梅尔频谱预测、时长预测、音高预测和能量预测，形状分别为：
+        返回一个元组，包含梅尔频谱预测、时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
         - mel_prediction: (batch_size, seq_len, num_mels)
         - duration_prediction: (batch_size, seq_len)
         - pitch_prediction: (batch_size, seq_len)
         - energy_prediction: (batch_size, seq_len)
+        - audio_padding_mask: (batch_size)
     """
 
     def __init__(self, config: FastSpeech2Config, dropout: float = 0., device: Optional[torch.device] = None):
@@ -524,7 +525,7 @@ class FastSpeech2(nn.Module):
         duration_sum_target: Optional[torch.Tensor] = None,
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
         # 如果没有提供填充掩码，则创建一个全为 False 的掩码
         if text_padding_mask is None:
             text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
@@ -557,7 +558,7 @@ class FastSpeech2(nn.Module):
         duration_prediction.masked_fill_(text_padding_mask, 0)
 
         # 防止时长小于零
-        duration = duration_prediction = duration_prediction.clamp(min=0)
+        duration = duration_prediction.clamp(min=0)
 
         # 对每个样本，如果总持续时间为 0，则将每个元素设为 1，避免后续除零错误
         duration += (duration.sum(dim=1, keepdim=True) == 0).to(dtype=duration.dtype)
@@ -597,4 +598,4 @@ class FastSpeech2(nn.Module):
 
         # 梅尔频谱预测
         mel_prediction = self.mel_predictor(x)  # [batch_size, audio_len, num_mels]
-        return mel_prediction, duration_prediction, pitch_prediction, energy_prediction
+        return mel_prediction, duration_prediction, pitch_prediction, energy_prediction, audio_padding_mask

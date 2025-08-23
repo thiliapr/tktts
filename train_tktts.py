@@ -246,6 +246,7 @@ def fastspeech2_loss(
     duration_sum_target: torch.Tensor,
     pitch_target: torch.Tensor,
     energy_target: torch.Tensor,
+    audio_padding_mask: torch.BoolTensor,
     duration_weight: float
 ) -> torch.Tensor:
     """
@@ -263,6 +264,7 @@ def fastspeech2_loss(
         duration_sum_target: 真实的总时长，形状为 [batch_size]
         pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
         energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
+        audio_padding_mask: 音频预测填充掩码，形状为 [batch_size]
         duration_weight: 持续时间损失的权重系数
 
     Returns:
@@ -285,10 +287,6 @@ def fastspeech2_loss(
 
         # 计算损失平均值
         return maksed_loss.sum() / (~expanded_mask).sum()
-
-    # 标记超出有效时长的填充帧 [batch_size, max_frames]
-    frame_indices = torch.arange(audio_pred.size(1), device=audio_pred.device).unsqueeze(0)  # [1, max_frames]
-    audio_padding_mask = frame_indices >= duration_pred.sum(dim=1).ceil().unsqueeze(1)  # [batch_size, max_frames]
 
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
@@ -368,8 +366,8 @@ def train(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, audio_length, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, duration_weight)  # 计算损失
+            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, audio_length, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, audio_padding_mask, duration_weight)  # 计算损失
 
         # 梯度缩放与反向传播
         scaler.scale(loss).backward()
@@ -434,7 +432,7 @@ def validate(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            audio_pred, duration_pred, pitch_pred, energy_pred = model(padded_text, positive_prompt, negative_prompt, text_padding_mask)
+            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(padded_text, positive_prompt, negative_prompt, text_padding_mask)
 
             # 填充序列，方便计算损失
             batch_size, audio_pred_len, num_mels = audio_pred.size()
@@ -443,12 +441,13 @@ def validate(
             audio_pred = torch.cat([audio_pred, torch.zeros(batch_size, max_len - audio_pred_len, num_mels, device=audio_pred.device)], dim=1)
             pitch_pred = torch.cat([pitch_pred, torch.zeros(batch_size, max_len - audio_pred_len, device=audio_pred.device)], dim=1)
             energy_pred = torch.cat([energy_pred, torch.zeros(batch_size, max_len - audio_pred_len, device=audio_pred.device)], dim=1)
+            audio_padding_mask = torch.cat([audio_padding_mask, torch.ones(batch_size, max_len - audio_pred_len, dtype=bool, device=audio_pred.device)], dim=1)
             padded_audio = torch.cat([padded_audio, torch.zeros(batch_size, max_len - audio_target_len, num_mels, device=audio_pred.device)], dim=1)
             padded_pitch = torch.cat([padded_pitch, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
             padded_energy = torch.cat([padded_energy, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
 
             # 计算损失
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, duration_weight)
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, audio_padding_mask, duration_weight)
 
         # 记录损失
         losses.append(loss.item())
