@@ -591,9 +591,11 @@ class FastSpeech2(nn.Module):
 
         # debug
         if pitch.size(1) != x.size(1):
-            print("ad:", duration)
+            print("\nad:", duration)
             print("ad_sum:", duration.sum(dim=1))
             print("ds_target:", duration_sum_target)
+            print("pitch.shape:", pitch.shape)
+            print("x.shape:", x.shape)
 
         # 将音高和能量作为附加特征添加到编码器输出中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
