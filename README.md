@@ -117,8 +117,6 @@ datasets
 python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/to/datasets/natsuiro_matsuri/metadata.json -o /path/to/datasets/metadata.json
 ```
 将其元数据合并到`/path/to/datasets/metadata.json`；此外，你可以将原来的`/path/to/datasets/shirakami_fubuki/metadata.json`和`/path/to/datasets/natsuiro_matsuri/metadata.json`删除
-> [!TIP]
-> 这个步骤可以运用在通用训练集和快速训练数据集。
 
 ### 可选: 切割数据集
 你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
@@ -126,9 +124,6 @@ python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/
 python split_dataset.py /path/to/dataset/metadata.json train.json:9 val.json:1
 ```
 这样，你的`/path/to/dataset`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`。
-> [!TIP]
-> 这个步骤可以运用在通用训练集和快速训练数据集。
-> 比如说你可以先在通用数据集划分出训练集和验证集，然后再准备快速训练数据集；或者先准备快速训练数据集，然后在快速训练数据集，然后再划分训练集和验证集。
 
 ### 训练分词器
 ```bash
