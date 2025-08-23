@@ -616,7 +616,7 @@ def main(args: argparse.Namespace):
     # 保存当前模型的检查点
     save_checkpoint(
         args.ckpt_path,
-        (model.module if torch.cuda.device_count() > 1 else model).cpu().state_dict(),
+        model.cpu().state_dict(),
         optimizer.state_dict(),
         metrics,
     )
