@@ -299,7 +299,12 @@ def fastspeech2_loss(
     audio_loss = masked_l1_loss(audio_pred, audio_target, audio_padding_mask)
     pitch_loss = masked_l1_loss(pitch_pred, pitch_target, audio_padding_mask)
     energy_loss = masked_l1_loss(energy_pred, energy_target, audio_padding_mask)
-    print(f"[debug] d={duration_loss.item():.2f}, a={audio_loss.item():.2f}, p={pitch_loss.item():.2f}, e={energy_loss.item():.2f}")
+
+    # debug info
+    print(f"\n[debug] d={duration_loss.item():.2f}, a={audio_loss.item():.2f}, p={pitch_loss.item():.2f}, e={energy_loss.item():.2f}")
+    if any(l.isnan().item() for l in [audio_loss, pitch_loss, energy_loss]):
+        print(f"d_pred: {duration_pred}")
+        print(f"d_sum: {duration_pred.sum(dim=1)}")
 
     # 返回组合损失
     return audio_loss + duration_loss + pitch_loss + energy_loss
