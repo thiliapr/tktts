@@ -533,6 +533,7 @@ class FastSpeech2(nn.Module):
         # debug info
         print(f"\n{text.shape=}")
         print(f"{duration_sum_target.shape=}")
+        print(f"{duration_sum_target=}")
         print(f"{pitch_target.shape=}")
 
         # 词嵌入
