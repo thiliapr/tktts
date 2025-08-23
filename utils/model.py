@@ -559,9 +559,8 @@ class FastSpeech2(nn.Module):
         # 防止时长小于零
         duration = duration_prediction = duration_prediction.clamp(min=0)
 
-        # debug info
-        print("d_pred:", duration_prediction)
-        print("d_sum:", duration_prediction.sum(dim=1))
+        # 对每个样本，如果总持续时间为 0，则将每个元素设为 1，避免后续除零错误
+        duration += (duration.sum(dim=1, keepdim=True) == 0).to(dtype=duration.dtype)
 
         # 调节时长，使其总和与目标值相同
         if duration_sum_target is not None:
