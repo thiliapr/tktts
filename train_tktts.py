@@ -13,7 +13,7 @@ import orjson
 import torch
 import numpy as np
 from tqdm import tqdm
-from torch import nn, optim
+from torch import optim
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader

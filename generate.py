@@ -6,7 +6,6 @@
 import os
 import pathlib
 import argparse
-from turtle import forward
 from typing import Optional
 import torch
 import librosa
@@ -78,7 +77,7 @@ def main(args: argparse.Namespace):
     negative_prompt = [negative_prompt] if negative_prompt else None
 
     # 生成音频
-    mel_prediction, _, _, _ = model(text, positive_prompt, negative_prompt)  # [1, seq_len, n_mels]
+    mel_prediction, _, _, _, _ = model(text, positive_prompt, negative_prompt)  # [1, seq_len, n_mels]
 
     # 去除批次维度，并转换为 NumPy 数组
     mel_prediction = mel_prediction.squeeze(0).cpu().numpy()  # [seq_len, num_mels]
