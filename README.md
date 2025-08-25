@@ -103,13 +103,13 @@ python augment_prompt_with_exclusion.py /path/to/dataset/metadata.json /path/to/
 datasets
     shirakami_fubuki
         metadata.json
-        ytb_live01_001.oog
-        ytb_live01_002.oog
+        ytb_live01_001.ogg
+        ytb_live01_002.ogg
         ...
     natsuiro_matsuri
         metadata.json
-        ytb_live01_001.oog
-        ytb_live01_002.oog
+        ytb_live01_001.ogg
+        ytb_live01_002.ogg
         ...
 ```
 你可以通过将不同数据集放在一个文件夹，比如`/path/to/datasets`，然后运行
