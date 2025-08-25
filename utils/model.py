@@ -586,8 +586,8 @@ class FastSpeech2(nn.Module):
         energy = energy_prediction if energy_target is None else energy_target
 
         # 确保音高、能量为非负值且整数
-        pitch = ((pitch + 0.5).clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
-        energy = ((energy + 0.5).clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
+        pitch = (pitch.clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
+        energy = (energy.clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
 
         # 将音高和能量作为附加特征添加到编码器输出中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
