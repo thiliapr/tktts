@@ -589,7 +589,7 @@ class FastSpeech2(nn.Module):
         pitch = (pitch.clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
         energy = (energy.clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
 
-        # 将音高和能量作为附加特征添加到编码器输出中
+        # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
 
         # 解码器
