@@ -535,16 +535,16 @@ class FastSpeech2(nn.Module):
             返回提示词的平均嵌入表示，形状为 (batch_size, 1, dim_model)。
         """
         # 获取提示词每个标签的嵌入
-        valid_tag_count = self.tag_embedding(prompt)  # [batch_size, num_tags, dim_model]
+        tag_embedding = self.tag_embedding(prompt)  # [batch_size, num_tags, dim_model]
 
         # 将填充部分置零
-        valid_tag_count.masked_fill_(padding_mask.unsqueeze(-1), 0)
+        tag_embedding.masked_fill_(padding_mask.unsqueeze(-1), 0)
 
         # 计算有效标签数量
         valid_tag_count = (~padding_mask).sum(dim=1, keepdim=True)  # [batch_size, 1]
 
         # 对有效标签嵌入求平均
-        tag_mean_embedding = valid_tag_count.sum(dim=1) / valid_tag_count  # [batch_size, dim_model]
+        tag_mean_embedding = tag_embedding.sum(dim=1) / valid_tag_count.clamp(min=1)  # [batch_size, dim_model]
 
         # 给提示词增加序列维度
         return tag_mean_embedding.unsqueeze(1)  # [batch_size, 1, dim_model]
@@ -565,9 +565,9 @@ class FastSpeech2(nn.Module):
         if text_padding_mask is None:
             text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
         if positive_prompt_mask is None:
-            positive_prompt_mask = torch.zeros_like(positive_prompt, dtype=torch.bool)  # [batch_size, text_len]
+            positive_prompt_mask = torch.zeros_like(positive_prompt, dtype=torch.bool)  # [batch_size, num_pos_tags]
         if negative_prompt_mask is None:
-            negative_prompt_mask = torch.zeros_like(negative_prompt, dtype=torch.bool)  # [batch_size, text_len]
+            negative_prompt_mask = torch.zeros_like(negative_prompt, dtype=torch.bool)  # [batch_size, num_neg_tags]
 
         # 词嵌入
         x = self.embedding(text) * math.sqrt(self.dim_model)
