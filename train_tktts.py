@@ -9,7 +9,6 @@ import random
 import os
 from typing import Optional
 from collections.abc import Iterator
-import orjson
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -21,6 +20,7 @@ from matplotlib import pyplot as plt
 from utils.checkpoint import TkTTSMetrics, load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.model import FastSpeech2
+from utils.tookit import convert_to_tensor, create_padding_mask, get_sequence_lengths
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
@@ -32,7 +32,7 @@ class TkTTSDataset(Dataset):
     文本转语音数据集加载器，用于处理音频-文本配对数据
 
     Args:
-        metadata_files: 元数据文件列表
+        dataset_file: 快速训练数据集文件
 
     Yields:
         - 分词后的文本ID序列
@@ -43,37 +43,24 @@ class TkTTSDataset(Dataset):
         - 音频的能量序列
     """
 
-    def __init__(self, metadata_files: list[pathlib.Path]):
-        self.data_samples = []
+    def __init__(self, dataset_file: pathlib.Path):
+        # 获取所有音频特征
+        self.data_samples = np.load(dataset_file.with_suffix(".npz"))
 
-        # 获取所有元数据和音频并加入数据列表
-        loaded_chunks = {}
-        for working_dir, audio_metadata in tqdm([
-            (metadata_file.parent, audio_metadata)
-            for metadata_file in metadata_files
-            for audio_metadata in orjson.loads(metadata_file.read_bytes())
-        ]):
-            # 加载音频内容分块
-            chunk_file = audio_metadata["filename"]
-            if chunk_file not in loaded_chunks:
-                loaded_chunks[chunk_file] = np.load(working_dir / chunk_file)
-
-            # 添加音频元数据信息和音频到列表
-            audio_id = audio_metadata["audio_id"]
-            self.data_samples.append((
-                audio_metadata["text"],
-                audio_metadata["positive_prompt"],
-                audio_metadata["negative_prompt"],
-                loaded_chunks[chunk_file][f"{audio_id}:mel"],
-                loaded_chunks[chunk_file][f"{audio_id}:pitch"],
-                loaded_chunks[chunk_file][f"{audio_id}:energy"]
-            ))
-
-    def __getitem__(self, index: int) -> tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]:
-        return self.data_samples[index]
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        return (
+            self.data_samples[f"{index}:text"],
+            self.data_samples[f"{index}:positive_prompt"],
+            self.data_samples[f"{index}:negative_prompt"],
+            self.data_samples[f"{index}:mel"],
+            self.data_samples[f"{index}:pitch"],
+            self.data_samples[f"{index}:energy"]
+        )
 
     def __len__(self) -> int:
-        return len(self.data_samples)
+        # 每个音频有 6 个特征: 文本序列、正面提示、负面提示、梅尔频谱、音高序列、能量序列
+        # 所以用音频特征总数除以 6 就是音频样本数
+        return len(self.data_samples) // 6
 
 
 class TkTTSDatasetSampler(Sampler[list[int]]):
@@ -83,7 +70,7 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
     该采样器会:
     1. 根据序列长度对样本进行排序
     2. 动态创建批次，确保每个批次的 token 总数不超过 max_batch_tokens
-    3. 每个epoch都会重新打乱数据顺序
+    3. 每个 epoch 都会重新打乱数据顺序
 
     Attributes:
         max_batch_tokens: 单个批次允许的最大 token 数量
@@ -101,11 +88,14 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         super().__init__()
         self.max_batch_tokens = max_batch_tokens
         self.seed = seed
-        self.batches = []
+        self.batches: list[list[int]]
 
         # 预计算所有样本的索引和长度
-        # dataset.data_samples 数据结构应为 list[tuple[文本 ID 序列, ..., 音频特征]]
-        self.index_and_lengths = [(idx, len(dataset.data_samples[idx][0]) + len(dataset.data_samples[idx][-1])) for idx in range(len(dataset))]
+        self.index_and_lengths = [
+            # 简单起见，我们用文本序列的长度加上梅尔频谱的帧数作为这个样本的长度，避免一大堆计算
+            (idx, len(dataset.data_samples[f"{idx}:text"]) + len(dataset.data_samples[f"{idx}:mel"]))
+            for idx in range(len(dataset))
+        ]
         self.index_to_length = dict(self.index_and_lengths)
 
     def set_epoch(self, epoch: int) -> None:
@@ -122,39 +112,30 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         sorted_pairs = sorted(self.index_and_lengths, key=lambda pair: (pair[1], generator.random()))
 
         # 初始化批次列表
-        batches_with_tokens: list[tuple[list[int], int]] = []
+        self.batches = []
         current_batch: list[int] = []
 
+        # 遍历每一个样本
         for idx, seq_len in sorted_pairs:
-            token_len = seq_len - 1  # 输入序列比原序列少1
-
             # 处理超长序列
-            if token_len > self.max_batch_tokens:
-                batches_with_tokens.append(([idx], token_len))
+            if seq_len > self.max_batch_tokens:
+                self.batches.append([idx])
                 continue
 
-            # 计算当前批次加入新样本后的token总数
-            estimated_tokens = (len(current_batch) + 1) * token_len
+            # 计算当前批次加入新样本后的 token 总数
+            estimated_tokens = (len(current_batch) + 1) * seq_len
             if estimated_tokens > self.max_batch_tokens:
-                # 当前批次中最长序列决定了该批次的token总数
-                longest_in_batch = self.index_to_length[current_batch[-1]] - 1
-                batch_tokens = longest_in_batch * len(current_batch)
-                batches_with_tokens.append((current_batch, batch_tokens))
+                self.batches.append(current_batch)
                 current_batch = []
 
             current_batch.append(idx)
 
         # 添加最后一个批次
         if current_batch:
-            longest_in_batch = self.index_to_length[current_batch[-1]] - 1
-            batch_tokens = longest_in_batch * len(current_batch)
-            batches_with_tokens.append((current_batch, batch_tokens))
+            self.batches.append(current_batch)
 
         # 将批次列表反转，使得较大的批次优先用于训练，有助于及早发现和修复 OOM（内存溢出）等问题
-        batches_with_tokens.reverse()
-
-        # 分配批次
-        self.batches = [batch for batch, _ in batches_with_tokens]
+        self.batches.reverse()
 
     def __iter__(self) -> Iterator[list[int]]:
         yield from self.batches
@@ -163,73 +144,71 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         return len(self.batches)
 
 
-def sequence_collate_fn(batch: list[tuple[list[int], list[int], list[int], np.ndarray, np.ndarray, np.ndarray]]) -> tuple[torch.Tensor, Optional[list[list[int]]], Optional[list[list[int]]], torch.Tensor, torch.Tensor, torch.Tensor, torch.LongTensor, torch.LongTensor]:
+def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> tuple[
+    torch.LongTensor,
+    torch.LongTensor,
+    torch.LongTensor,
+    torch.BoolTensor,
+    torch.BoolTensor,
+    torch.BoolTensor,
+    torch.LongTensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """
-    处理语音合成任务的批次数据，将变长序列填充对齐并转换为PyTorch张量。
-    
-    该函数主要完成以下工作：
-    1. 解压批次数据中的文本序列、正负提示词、梅尔频谱、音高和能量特征
-    2. 将提示词列表处理为None（如果为空）
-    3. 将所有数值数据转换为PyTorch张量
-    4. 计算文本和频谱的实际长度
-    5. 使用pad_sequence对变长序列进行批量填充
-    6. 返回处理后的张量数据及对应长度信息
+    处理变长序列数据的批次整理函数
+    将输入的多个变长序列样本整理为批次张量，包括文本序列、提示词、梅尔频谱图、音高和能量等特征，并生成相应的填充掩码和序列长度信息
+
+    工作流程：
+    1. 解压批次数据并将每个特征转换为 PyTorch 张量
+    2. 为文本和提示词序列创建填充掩码
+    3. 计算音频序列的实际长度
+    4. 对所有序列进行填充对齐处理
+    5. 返回整理后的批次数据
 
     Args:
-        batch: 包含多个样本的列表，每个样本是元组形式：
-            - 文本序列
-            - 正提示词序列
-            - 负提示词序列 
-            - 梅尔频谱
-            - 音高特征
-            - 能量特征
+        batch: 包含多个样本的列表，每个样本是包含文本序列、正向提示词、负向提示词、梅尔频谱图、音高和能量特征的元组
 
     Returns:
-        处理后的批次数据元组，包含：
-            - 填充后的文本序列
-            - 正提示词列表（可能为None）
-            - 负提示词列表（可能为None）
-            - 填充后的梅尔频谱
-            - 填充后的音高特征
-            - 填充后的能量特征
-            - 文本序列实际长度
-            - 频谱序列实际长度
+        包含整理后批次数据的元组，包括填充后的文本序列、正向提示词、负向提示词、
+        文本填充掩码、正向提示词掩码、负向提示词掩码、音频长度、填充后的音高序列、
+        填充后的能量序列和填充后的音频序列
 
     Examples:
-        >>> batch = [([1,2,3], [], [], np.array([...]), ...), ...]
-        >>> collated = sequence_collate_fn(batch)
+        >>> from torch.utils.data import DataLoader
+        >>> dataset = YourDataset()
+        >>> dataloader = DataLoader(dataset, batch_size=32, collate_fn=sequence_collate_fn)
+        >>> for batch in dataloader:
+        >>>     text, pos_prompt, neg_prompt, text_mask, pos_mask, neg_mask, audio_len, pitch, energy, audio = batch
     """
-    # 解压批次数据
-    text_sequences, positive_prompt, negative_prompt, mel_spectrogram, pitch, energy = zip(*batch)
+    # 解压批次数据并将每个特征列表转换为张量列表
+    text_sequences, positive_prompt, negative_prompt, mel_spectrogram, pitch, energy = [convert_to_tensor(item) for item in zip(*batch)]
 
-    # 如果提示为空，则将其置为 None
-    positive_prompt = positive_prompt or None
-    negative_prompt = negative_prompt or None
+    # 创建填充掩码用于标识有效数据位置
+    text_padding_mask = create_padding_mask(text_sequences)
+    positive_prompt_mask = create_padding_mask(positive_prompt)
+    negative_prompt_mask = create_padding_mask(negative_prompt)
 
-    # 定义转换为 PyTorch 张量的函数
-    convert_to_tensor = lambda x: [torch.tensor(item) for item in x]
+    # 计算每个音频样本的实际长度
+    audio_length = get_sequence_lengths(mel_spectrogram)
 
-    # 转换为 PyTorch 张量
-    text_sequences = convert_to_tensor(text_sequences)
-    mel_spectrogram = convert_to_tensor(mel_spectrogram)
-    pitch = convert_to_tensor(pitch)
-    energy = convert_to_tensor(energy)
-
-    # 计算实际序列长度
-    text_lengths = torch.tensor([len(seq) for seq in text_sequences], dtype=int)
-    audio_lengths = torch.tensor([auido.size(0) for auido in mel_spectrogram], dtype=int)
-
-    # 定义序列填充函数
-    fast_pad_sequence = lambda x: torch.nn.utils.rnn.pad_sequence(x, batch_first=True)
-
-    # 对序列进行填充对齐（批次维度在前）
-    padded_text = fast_pad_sequence(text_sequences).to(dtype=int)
-    padded_audio = fast_pad_sequence(mel_spectrogram)
-    padded_pitch = fast_pad_sequence(pitch)
-    padded_energy = fast_pad_sequence(energy)
+    # 对变长序列进行填充对齐，使批次内所有样本长度一致
+    padded_text, padded_positive_prompt, padded_negative_prompt, padded_audio, padded_pitch, padded_energy = [torch.nn.utils.rnn.pad_sequence(item, batch_first=True) for item in [text_sequences, positive_prompt, negative_prompt, mel_spectrogram, pitch, energy]]
 
     # 返回批次数据
-    return padded_text, positive_prompt, negative_prompt, padded_audio, padded_pitch, padded_energy, text_lengths, audio_lengths
+    return (
+        padded_text,
+        padded_positive_prompt,
+        padded_negative_prompt,
+        text_padding_mask,
+        positive_prompt_mask,
+        negative_prompt_mask,
+        audio_length,
+        padded_pitch,
+        padded_energy,
+        padded_audio
+    )
 
 
 def fastspeech2_loss(
@@ -354,15 +333,12 @@ def train(
     # 遍历整个训练集
     for step, batch in zip(range(num_iterators), dataloader):
         # 数据移至目标设备
-        padded_text, positive_prompt, negative_prompt, padded_audio, padded_pitch, padded_energy, text_length, audio_length = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
-
-        # 准备文本掩码
-        text_padding_mask = torch.arange(padded_text.size(1), device=padded_text.device).unsqueeze(0) >= text_length.unsqueeze(1)
+        text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(padded_text, positive_prompt, negative_prompt, text_padding_mask, audio_length, padded_pitch, padded_energy)  # 模型前向传播（使用教师强制）
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, audio_padding_mask, duration_weight)  # 计算损失
+            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model.forward(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
 
         # 梯度缩放与反向传播
         scaler.scale(loss).backward()
@@ -419,30 +395,27 @@ def validate(
     # 遍历整个验证集
     for batch in tqdm(dataloader, total=len(dataloader)):
         # 数据移至目标设备
-        padded_text, positive_prompt, negative_prompt, padded_audio, padded_pitch, padded_energy, text_length, audio_length = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
-
-        # 准备文本掩码
-        text_padding_mask = torch.arange(padded_text.size(1), device=padded_text.device).unsqueeze(0) >= text_length.unsqueeze(1)
+        text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(padded_text, positive_prompt, negative_prompt, text_padding_mask)
+            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
 
             # 填充序列，方便计算损失
             batch_size, audio_pred_len, num_mels = audio_pred.size()
-            audio_target_len = padded_audio.size(1)
-            max_len = max(audio_pred_len, audio_target_len)
-            audio_pred = torch.cat([audio_pred, torch.zeros(batch_size, max_len - audio_pred_len, num_mels, device=audio_pred.device)], dim=1)
-            pitch_pred = torch.cat([pitch_pred, torch.zeros(batch_size, max_len - audio_pred_len, device=audio_pred.device)], dim=1)
-            energy_pred = torch.cat([energy_pred, torch.zeros(batch_size, max_len - audio_pred_len, device=audio_pred.device)], dim=1)
-            audio_padding_mask = torch.cat([audio_padding_mask, torch.ones(batch_size, max_len - audio_pred_len, dtype=bool, device=audio_pred.device)], dim=1)
-            padded_audio = torch.cat([padded_audio, torch.zeros(batch_size, max_len - audio_target_len, num_mels, device=audio_pred.device)], dim=1)
-            padded_pitch = torch.cat([padded_pitch, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
-            padded_energy = torch.cat([padded_energy, torch.zeros(batch_size, max_len - audio_target_len, device=audio_pred.device)], dim=1)
+            padding_len = max(audio_pred_len - audio_target.size(1), 0)
+            if padding_len:
+                audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=device)], dim=1)
+                pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
+                energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
+            else:
+                audio_target = audio_target[:, :audio_pred_len]
+                pitch_target = pitch_target[:, :audio_pred_len]
+                energy_target = energy_target[:, :audio_pred_len]
 
             # 计算损失
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, padded_audio, audio_length.to(dtype=duration_pred.dtype), padded_pitch, padded_energy, audio_padding_mask, duration_weight)
+            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length.to(dtype=duration_pred.dtype), pitch_target, energy_target, audio_padding_mask, duration_weight)
 
         # 记录损失
         losses.append(loss.item())
@@ -537,15 +510,15 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="训练 TkTTS 模型")
     parser.add_argument("num_epochs", type=int, help="训练的总轮数")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
-    parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")
-    parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
+    parser.add_argument("-t", "--train-dataset", type=pathlib.Path, required=True, help="训练集文件路径")
+    parser.add_argument("-v", "--val-dataset", type=pathlib.Path, help="验证集文件路径")
     parser.add_argument("-tt", "--train-max-batch-tokens", default=4096, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-tv", "--val-max-batch-tokens", default=16384, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
     parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
     parser.add_argument("-do", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
-    parser.add_argument("-dw", "--duration-weight", default=DEFAULT_DUARTION_WEIGHT, type=float, help="持续时间损失的权重系数")
+    parser.add_argument("-dw", "--duration-weight", default=DEFAULT_DUARTION_WEIGHT, type=float, help="持续时间损失的权重系数，默认为 %(default)s")
     parser.add_argument("-k", "--show-training-process", action="store_true", help="展示训练过程图表，而不仅仅是保存到`<ckpt_path>/statistics.png`")
     return parser.parse_args(args)
 
@@ -563,10 +536,6 @@ def main(args: argparse.Namespace):
 
     # 转移模型到设备
     model = model.to(device)
-
-    # 多 GPU 时使用 DataParallel 包装模型
-    # if torch.cuda.device_count() > 1:
-    #     model = nn.DataParallel(model)
 
     # 创建优化器并加载状态
     optimizer = optim.AdamW(model.parameters())

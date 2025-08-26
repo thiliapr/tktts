@@ -72,22 +72,26 @@ def main(args: argparse.Namespace):
     if negative_prompt is not None:
         print(f"负面提示词: {[tag_label_encoder.id_to_tag[tag] for tag in negative_prompt]}")
 
-    # 给提示词加上批次维度
-    positive_prompt = [positive_prompt] if positive_prompt else None
-    negative_prompt = [negative_prompt] if negative_prompt else None
+    # 将提示词序列转换为张量
+    positive_prompt = torch.tensor([positive_prompt]) if positive_prompt else None  # 增加批次维度
+    negative_prompt = torch.tensor([negative_prompt]) if negative_prompt else None
 
     # 生成音频
-    mel_prediction, _, _, _, _ = model(text, positive_prompt, negative_prompt)  # [1, seq_len, n_mels]
+    mel_prediction, _, _, _, _ = model.forward(
+        text,
+        positive_prompt,
+        negative_prompt,
+    )  # [1, audio_len, num_mels]
 
     # 去除批次维度，并转换为 NumPy 数组
-    mel_prediction = mel_prediction.squeeze(0).cpu().numpy()  # [seq_len, num_mels]
+    mel_prediction = mel_prediction.squeeze(0).cpu().numpy()  # [audio_len, num_mels]
 
     # 打印帧数
     print(f"STFT 帧数: {len(mel_prediction)}")
 
     # 将生成的梅尔频谱转换为 STFT 矩阵
     stft_matrix = librosa.feature.inverse.mel_to_stft(
-        mel_prediction.T,  # 转置为 [num_mels, seq_len]
+        mel_prediction.T,  # 转置为 [num_mels, audio_len]
         sr=extra_config["sample_rate"],
         n_fft=extra_config["fft_length"],
     )

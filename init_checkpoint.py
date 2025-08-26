@@ -90,9 +90,8 @@ def main(args: argparse.Namespace):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
     # 检查标签文件是否存在
-    tags = ["[PAD]"]  # 添加默认的填充标签
     if args.tags_file:
-        tags.extend(tag.strip() for tag in args.tags_file.read_text("utf-8").splitlines() if tag.strip())
+        tags = [tag.strip() for tag in args.tags_file.read_text("utf-8").splitlines() if tag.strip()]
     else:
         # 如果没有自定义标签，则警告
         warnings.warn(
@@ -101,6 +100,7 @@ def main(args: argparse.Namespace):
             "请运行`python list_tags_from_datasets.py /path/to/dataset/metadata.json -o /path/to/tags.txt`，\n"
             "然后在运行本脚本时带上参数`-t /path/to/tags.txt`"
         )
+        tags = ["default"]
 
     # 创建标签编码器
     tag_label = {tag: idx for idx, tag in enumerate(tags)}

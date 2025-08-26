@@ -27,12 +27,7 @@ class TagLabelEncoder:
         pad_token: 填充标签
     """
 
-    pad_token = "[PAD]"
-
     def __init__(self, tags: dict[str, int]):
-        assert self.pad_token in tags, "标签字典中必须包含 [PAD] 标签"
-        assert tags[self.pad_token] == 0, "标签字典中 [PAD] 标签的 ID 必须为0"
-
         # 初始化标签编码器
         self.vocab = tags
         self.id_to_tag = {v: k for k, v in tags.items()}
@@ -51,9 +46,9 @@ class TagLabelEncoder:
             包含标签对应整数ID的列表。如果标签不在词汇表中，则忽略该标签。
         
         Examples:
-            >>> encoder = TagLabelEncoder({"[PAD]": 0, "character:白上フブキ": 1, "character:夏色まつり": 2})
-            >>> encoder.encode(["[PAD]", "character:白上フブキ", "character:夏色まつり", "unknown_tag"])
-            [0, 1, 2]  # unknown_tag 不在词汇表中，因此被忽略
+            >>> encoder = TagLabelEncoder({"character:白上フブキ": 0, "character:夏色まつり": 1})
+            >>> encoder.encode(["character:白上フブキ", "character:夏色まつり", "unknown_tag"])
+            [0, 1]  # unknown_tag 不在词汇表中，因此被忽略
         """
         return [self.vocab[tag] for tag in tag_list if tag in self.vocab]
 

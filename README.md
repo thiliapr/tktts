@@ -156,13 +156,13 @@ python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
 
 考虑到兼容两种加载方式（加载原始通用数据集和快速训练数据集）的代码很难维护（见[tkaimidi](https://github.com/thiliapr/tkaimidi)一直没维护），所以这里强制要求必须转换为快速训练数据集。你可以运行
 ```bash
-python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset
+python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset.npz
 ```
-新的元数据将会在`/path/to/fast_dataset/metadata.json`
+数据集将会被压缩为一个文件到`/path/to/fast_dataset.npz`
 
 ### 训练模型
 ```bash
-python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.json -v /path/to/dataset/val.json
+python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.npz -v /path/to/dataset/val.npz
 ```
 将`<num_epochs>`替换为实际的你想训练的轮数  
 > [!TIP]
@@ -171,7 +171,7 @@ python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.json 
 ### 生成
 ```bash
 python list_tags_from_ckpt.py /path/to/ckpt  # 列出所有标签
-python generate.py /path/to/ckpt output.wav ホロライブ所属のバーチャルyoutuber、夏色まつりだよっ！！ -p character:夏色まつり -p source:youtube -p sex:female -p age:teenager -n sex:male
+python generate.py /path/to/ckpt output.wav ホロライブ所属のバーチャルyoutuber、夏色まつりだよっ！！ -p character:夏色まつり -p source:youtube -p sex:female -p age:teenager -n sex:male  # 用`-p`指定正面提示，`-n`指定负面提示
 ```
 
 ### 注意事项

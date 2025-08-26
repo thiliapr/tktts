@@ -9,7 +9,6 @@ from typing import NamedTuple, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.utils.rnn import pad_sequence
 
 
 class ScaleNorm(nn.Module):
@@ -467,16 +466,18 @@ class FastSpeech2(nn.Module):
     Args:
         config: FastSpeech2Config 配置对象，包含模型的超参数设置。
         dropout: Dropout 概率，用于防止过拟合。
-        device: 可选的设备参数，用于指定模型运行的设备。
+        device: 设备参数，用于指定模型运行的设备。
 
     Inputs:
         text: 输入文本的张量，形状为 (batch_size, seq_len)。
-        positive_prompt: 可选的标签列表，每个标签是一个整数列表。len(positive_prompt) 应等于 batch_size，每个标签列表的长度可以不同。
-        negative_prompt: 可选的负面标签列表，格式同 positive_prompt。
-        text_padding_mask: 可选的文本填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False。
-        duration_sum_target: 可选的总时长目标张量，形状为 (batch_size)。
-        pitch_target: 可选的音高目标张量，形状为 (batch_size, seq_len)。
-        energy_target: 可选的能量目标张量，形状为 (batch_size, seq_len)。
+        positive_prompt: 正向提示标签张量，形状为 (batch_size, num_positive_prompts)。
+        negative_prompt: 负向提示标签张量，形状为 (batch_size, num_negative_prompts)。
+        text_padding_mask: 文本填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False。
+        positive_prompt_mask: 正向提示标签填充掩码，形状同 positive_prompt。
+        negative_prompt_mask: 负向提示标签填充掩码，形状同 negative_prompt。
+        duration_sum_target: 总时长目标张量，形状为 (batch_size)。
+        pitch_target: 音高目标张量，形状为 (batch_size, seq_len)。
+        energy_target: 能量目标张量，形状为 (batch_size, seq_len)。
 
     Outputs:
         返回一个元组，包含梅尔频谱预测、时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
@@ -516,12 +517,46 @@ class FastSpeech2(nn.Module):
         # 梅尔频谱预测器
         self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
 
+    def prompt_embedding(self, prompt: torch.LongTensor, padding_mask: Optional[torch.BoolTensor]):
+        """
+        获取提示词的嵌入表示，并对填充部分进行处理。
+
+        工作流程如下：
+            1. 通过标签嵌入层获取每个标签的嵌入表示。
+            2. 将填充部分的嵌入值置为零。
+            3. 计算有效标签的数量。
+            4. 对有效标签的嵌入求平均，得到最终的提示词嵌入。
+
+        Args:
+            prompt: 正向提示标签的张量，形状为 (batch_size, num_tags)。
+            padding_mask: 正向提示标签的填充掩码，形状同 prompt。
+
+        Returns:
+            返回提示词的平均嵌入表示，形状为 (batch_size, 1, dim_model)。
+        """
+        # 获取提示词每个标签的嵌入
+        valid_tag_count = self.tag_embedding(prompt)  # [batch_size, num_tags, dim_model]
+
+        # 将填充部分置零
+        valid_tag_count.masked_fill_(padding_mask.unsqueeze(-1), 0)
+
+        # 计算有效标签数量
+        valid_tag_count = (~padding_mask).sum(dim=1, keepdim=True)  # [batch_size, 1]
+
+        # 对有效标签嵌入求平均
+        tag_mean_embedding = valid_tag_count.sum(dim=1) / valid_tag_count  # [batch_size, dim_model]
+
+        # 给提示词增加序列维度
+        return tag_mean_embedding.unsqueeze(1)  # [batch_size, 1, dim_model]
+
     def forward(
         self,
-        text: torch.Tensor,
-        positive_prompt: Optional[list[list[int]]] = None,
-        negative_prompt: Optional[list[list[int]]] = None,
+        text: torch.LongTensor,
+        positive_prompt: Optional[torch.LongTensor] = None,
+        negative_prompt: Optional[torch.LongTensor] = None,
         text_padding_mask: Optional[torch.BoolTensor] = None,
+        positive_prompt_mask: Optional[torch.BoolTensor] = None,
+        negative_prompt_mask: Optional[torch.BoolTensor] = None,
         duration_sum_target: Optional[torch.Tensor] = None,
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
@@ -529,23 +564,19 @@ class FastSpeech2(nn.Module):
         # 如果没有提供填充掩码，则创建一个全为 False 的掩码
         if text_padding_mask is None:
             text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
+        if positive_prompt_mask is None:
+            positive_prompt_mask = torch.zeros_like(positive_prompt, dtype=torch.bool)  # [batch_size, text_len]
+        if negative_prompt_mask is None:
+            negative_prompt_mask = torch.zeros_like(negative_prompt, dtype=torch.bool)  # [batch_size, text_len]
 
         # 词嵌入
         x = self.embedding(text) * math.sqrt(self.dim_model)
 
         # 标签嵌入
-        if positive_prompt:
-            tag_batch = pad_sequence([torch.tensor(t, dtype=int, device=x.device) for t in positive_prompt], batch_first=True, padding_value=0)
-            tag_mask = tag_batch == 0
-
-            # 将标签嵌入添加到输入嵌入中
-            x = x + (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
-        if negative_prompt:
-            tag_batch = pad_sequence([torch.tensor(t, dtype=int, device=x.device) for t in negative_prompt], batch_first=True, padding_value=0)
-            tag_mask = tag_batch == 0
-
-            # 从输入嵌入中减去负面标签嵌入
-            x = x - (self.tag_embedding(tag_batch).masked_fill(tag_mask.unsqueeze(-1), 0).sum(dim=1) / (~tag_mask).sum(dim=1, keepdim=True)).unsqueeze(1)
+        if positive_prompt is not None:
+            x = x + self.prompt_embedding(positive_prompt, positive_prompt_mask)
+        if negative_prompt is not None:
+            x = x - self.prompt_embedding(negative_prompt, negative_prompt_mask)
 
         # 编码器
         for layer in self.encoder:
@@ -567,7 +598,7 @@ class FastSpeech2(nn.Module):
         if duration_sum_target is not None:
             duration, duration_sum_target = duration.float(), duration_sum_target.float()  # 转化为 float，避免精度丢失导致后面计算 duration_pred_sum != duration_sum_target
             duration *= (duration_sum_target.unsqueeze(1) / duration.sum(dim=1, keepdim=True))  # 计算缩放，使 duration_pred_sum 等于 duration_sum_target
-            duration -= 0.7 / duration.size(1)  # 减去微小值避免 duration.sum(dim=1).ceil() != duration_sum_target
+            duration -= 0.1 / duration.size(1)  # 减去微小值避免 duration.sum(dim=1).ceil() != duration_sum_target
             duration = duration.to(dtype=x.dtype)  # 转换回原来精度
 
         # 长度调节
