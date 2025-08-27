@@ -8,4 +8,5 @@ pyworld
 soundfile
 numpy
 matplotlib
+tensorboard
 luaparser  # extract_artemis.py

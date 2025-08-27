@@ -3,6 +3,7 @@
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import shutil
 import warnings
 import argparse
 import pathlib
@@ -11,9 +12,10 @@ from typing import Optional
 import torch
 import numpy as np
 from torch import optim
+from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoTokenizer
 from utils.checkpoint import TagLabelEncoder, save_checkpoint
-from utils.constants import DEFAULT_FFT_CONV1_KERNEL_SIZE, DEFAULT_FFT_CONV2_KERNEL_SIZE, DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_MELS, DEFAULT_PREDICTOR_KERNEL_SIZE, DEFAULT_FRAME_LENGTH, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH, DEFAULT_VARIANCE_BINS
+from utils.constants import DEFAULT_FFT_CONV1_KERNEL_SIZE, DEFAULT_FFT_CONV2_KERNEL_SIZE, DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_MELS, DEFAULT_PREDICTOR_KERNEL_SIZE, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH, DEFAULT_VARIANCE_BINS
 from utils.model import FastSpeech2, FastSpeech2Config
 
 
@@ -62,7 +64,6 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-fl", "--fft-length", type=int, default=DEFAULT_FFT_LENGTH, help="FFT窗口长度，默认为 %(default)s")
     parser.add_argument("-wl", "--win-length", type=int, default=DEFAULT_WIN_LENGTH, help="窗函数长度，默认为 %(default)s")
     parser.add_argument("-hl", "--hop-length", type=int, default=DEFAULT_HOP_LENGTH, help="帧移长度，默认为 %(default)s")
-    parser.add_argument("-pl", "--frame-length", type=int, default=DEFAULT_FRAME_LENGTH, help="YIN 算法的分析帧长度，应与 STFT 的 win_length 协调，通常设为 win_length 的 2 倍，默认为 %(default)s")
     parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="注意力头的数量，默认为 %(default)s")
     parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="每个注意力头的维度，默认为 %(default)s")
     parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="前馈网络的隐藏层维度，默认为 %(default)s")
@@ -128,21 +129,24 @@ def main(args: argparse.Namespace):
     # 初始化优化器
     optimizer = optim.AdamW(model.parameters())
 
-    # 初始化训练历史记录
-    metrics = {"val_loss": [], "train_loss": []}
-
     # 生成模型生成配置
     generation_config = {
         "num_heads": args.num_heads,
         "sample_rate": args.sample_rate,
         "fft_length": args.fft_length,
-        "frame_length": args.frame_length,
         "hop_length": args.hop_length,
         "win_length": args.win_length,
     }
 
+    # 创建 SummaryWriter，可视化模型初始化状态
+    shutil.rmtree(args.ckpt_path / "logdir", ignore_errors=True)
+    writer = SummaryWriter(args.ckpt_path / "logdir/init")
+    writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag="Text Embedding")
+    writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag="Tag Embedding")
+    writer.close()
+
     # 保存为检查点
-    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), metrics, generation_config, tag_label_encoder)
+    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), 0, generation_config, tag_label_encoder)
 
     # 打印初始化成功信息
     print(f"检查点初始化成功，已保存到 {args.ckpt_path}")

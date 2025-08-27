@@ -3,12 +3,13 @@
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import argparse
-import pathlib
-import random
 import os
+import random
+import pathlib
+import argparse
 from typing import Optional
 from collections.abc import Iterator
+from matplotlib import pyplot as plt
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -16,8 +17,8 @@ from torch import optim
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader
-from matplotlib import pyplot as plt
-from utils.checkpoint import TkTTSMetrics, load_checkpoint_train, save_checkpoint
+from torch.utils.tensorboard import SummaryWriter
+from utils.checkpoint import load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.model import FastSpeech2
 from utils.tookit import convert_to_tensor, create_padding_mask, get_sequence_lengths
@@ -45,7 +46,7 @@ class TkTTSDataset(Dataset):
 
     def __init__(self, dataset_file: pathlib.Path):
         # 获取所有音频特征
-        self.data_samples = np.load(dataset_file.with_suffix(".npz"))
+        self.data_samples = np.load(dataset_file)
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return (
@@ -222,7 +223,7 @@ def fastspeech2_loss(
     energy_target: torch.Tensor,
     audio_padding_mask: torch.BoolTensor,
     duration_weight: float
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     计算 FastSpeech2 模型的复合损失函数，包含音频重建、时长、音高和能量损失。
 
@@ -242,7 +243,7 @@ def fastspeech2_loss(
         duration_weight: 持续时间损失的权重系数
 
     Returns:
-        组合损失值，标量张量
+        各分量（梅尔频谱、时长总和、音高、能量）损失值，标量张量
     """
     def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor):
         "计算掩码区域的L1损失，仅对有效帧求平均"
@@ -272,8 +273,8 @@ def fastspeech2_loss(
     pitch_loss = masked_l1_loss(pitch_pred, pitch_target, audio_padding_mask)
     energy_loss = masked_l1_loss(energy_pred, energy_target, audio_padding_mask)
 
-    # 返回组合损失
-    return audio_loss + duration_loss + pitch_loss + energy_loss
+    # 返回各分量损失
+    return audio_loss, duration_loss, pitch_loss, energy_loss
 
 
 def train(
@@ -284,7 +285,7 @@ def train(
     duration_weight: float,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> list[float]:
+) -> list[tuple[float, float, float, float]]:
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
 
@@ -306,7 +307,11 @@ def train(
         device: 训练设备（默认使用 CPU）
 
     Returns:
-        每个梯度更新步骤的平均损失值列表
+        每个梯度更新步骤的平均损失值列表，包括
+        - 梅尔频谱损失
+        - 时长总和损失
+        - 音高预测损失
+        - 能量预测损失
 
     Examples:
         >>> losses = train(model, loader, opt)
@@ -316,16 +321,16 @@ def train(
     model.train()
 
     # 初始化损失列表
-    losses = []
+    loss_results = []
 
     # 计算训练多少次迭代
     num_iterators = len(dataloader) // accumulation_steps * accumulation_steps
 
     # 创建进度条，显示训练进度
-    progress_bar = tqdm(total=num_iterators)
+    progress_bar = tqdm(total=num_iterators, desc="Train")
 
     # 当前累积步骤的总损失
-    accumulated_loss = 0
+    acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
 
     # 提前清空梯度
     optimizer.zero_grad()
@@ -338,11 +343,17 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model.forward(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            audio_loss, duration_loss, pitch_loss, energy_loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            loss = audio_loss + duration_loss + pitch_loss + energy_loss
 
         # 梯度缩放与反向传播
         scaler.scale(loss).backward()
-        accumulated_loss += loss.item()
+
+        # 更新累积损失
+        acc_audio_loss += audio_loss.item() / accumulation_steps
+        acc_duration_loss += duration_loss.item() / accumulation_steps
+        acc_pitch_loss += pitch_loss.item() / accumulation_steps
+        acc_energy_loss += energy_loss.item() / accumulation_steps
 
         # 达到累积步数时更新参数
         if (step + 1) % accumulation_steps == 0:
@@ -350,15 +361,14 @@ def train(
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
 
-            accumulated_loss /= accumulation_steps
-            losses.append(accumulated_loss)  # 记录平均损失
-            progress_bar.set_postfix(loss=accumulated_loss)  # 更新进度条
-            accumulated_loss = 0  # 重置累积损失
+            loss_results.append((acc_audio_loss, acc_duration_loss, acc_pitch_loss, acc_energy_loss))  # 记录平均损失
+            acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0  # 重置累积损失
 
         # 更新进度条
+        progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         progress_bar.update()
 
-    return losses
+    return loss_results
 
 
 @torch.inference_mode
@@ -367,33 +377,36 @@ def validate(
     dataloader: DataLoader,
     duration_weight: float,
     device: torch.device = torch.device("cpu")
-) -> list[float]:
+) -> list[tuple[int, int, int, tuple[float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
-    计算模型在验证集上的平均损失值，用于监控训练过程和模型选择
-    整个过程使用推理模式，禁用梯度计算和自动微分以节省内存和加速计算
+    计算模型在验证集上的各项损失值，包括音频重建损失、持续时间损失、音高损失和能量损失
+    使用推理模式禁用梯度计算，节省内存并加速验证过程
+    自动处理音频序列长度不匹配的问题，通过填充或截断确保损失计算的正确性
+    支持自动混合精度计算，在保持精度的同时提升计算效率
 
     Args:
-        model: 要验证的FastSpeech2模型实例
-        dataloader: 验证集的数据加载器
-        duration_weight: 持续时间损失的权重系数
-        device: 计算设备，默认为CPU
+        model: 要验证的 FastSpeech2 模型实例
+        dataloader: 验证集的数据加载器，提供批次数据
+        duration_weight: 持续时间损失的权重系数，用于调整不同损失项的重要性
+        device: 计算设备，用于指定模型和数据所在的硬件设备
 
     Returns:
-        包含每个批次损失值的列表
+        包含每个样本详细损失信息的列表，每个元素为元组：
+        (文本序列长度, 预测音频长度, 目标音频长度, (音频损失, 持续时间损失, 音高损失, 能量损失))
 
     Examples:
-        >>> losses = validate(model, val_loader, 1.0, torch.device("cuda"))
-        >>> avg_loss = sum(losses) / len(losses)
+        >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
+        >>> audio_loss_avg = sum(result[3][0] for result in validation_results) / len(validation_results)
     """
     # 设置模型为评估模式
     model.eval()
 
     # 初始化损失列表
-    losses = []
+    loss_results = []
 
-    # 遍历整个验证集
-    for batch in tqdm(dataloader, total=len(dataloader)):
+    # 遍历验证集所有批次数据，显示进度条
+    for batch in tqdm(dataloader, total=len(dataloader), desc="Validate"):
         # 数据移至目标设备
         text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
@@ -403,98 +416,24 @@ def validate(
             audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
 
             # 填充序列，方便计算损失
-            batch_size, audio_pred_len, num_mels = audio_pred.size()
-            padding_len = max(audio_pred_len - audio_target.size(1), 0)
-            if padding_len:
+            batch_size, pred_audio_length, num_mels = audio_pred.size()
+            target_audio_length = audio_target.size(1)  # 保留原来的目标帧数，记录损失用
+            if padding_len := max(pred_audio_length - audio_target.size(1), 0):
                 audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=device)], dim=1)
                 pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
                 energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
             else:
-                audio_target = audio_target[:, :audio_pred_len]
-                pitch_target = pitch_target[:, :audio_pred_len]
-                energy_target = energy_target[:, :audio_pred_len]
+                audio_target = audio_target[:, :pred_audio_length]
+                pitch_target = pitch_target[:, :pred_audio_length]
+                energy_target = energy_target[:, :pred_audio_length]
 
             # 计算损失
-            loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length.to(dtype=duration_pred.dtype), pitch_target, energy_target, audio_padding_mask, duration_weight)
+            all_loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length.to(dtype=duration_pred.dtype), pitch_target, energy_target, audio_padding_mask, duration_weight)
 
-        # 记录损失
-        losses.append(loss.item())
+        # 记录当前批次的损失信息
+        loss_results.append((text_sequences.size(1), pred_audio_length, target_audio_length, tuple(loss.item() for loss in all_loss)))
 
-    return losses
-
-
-def plot_training_process(metrics: TkTTSMetrics, img_path: pathlib.Path | str, show_training_process: bool = False):
-    """
-    绘制损失变化过程。训练损失使用红线，验证损失用蓝色点线。
-    为每种损失分别绘制置信区间。
-
-    Args:
-        metrics: 训练历史记录
-        img_path: 图形保存的文件路径，可以是字符串或Path对象。
-        show_training_process: 展示训练过程图表，而不仅仅是保存为文件
-
-    Example:
-        ```
-        metrics = {
-            "train_loss": [
-                {"mean": 1.2, "std": 0.1, "count": 100},
-                {"mean": 1.0, "std": 0.08, "count": 100},
-            ],
-            "val_loss": [
-                {"mean": 1.1, "std": 0.09},
-                {"mean": 0.95, "std": 0.07},
-            ]
-        }
-        ```
-    """
-    # 创建图形和坐标轴
-    _, ax = plt.subplots(figsize=(10, 6))
-
-    # 计算验证点的x坐标（每个epoch的起始位置）
-    current_iteration = metrics["train_loss"][0]["count"]  # 当前累计的迭代次数
-    val_iteration_points = [current_iteration]  # 存储每个epoch的起始迭代次数
-    for epoch in metrics["train_loss"][1:]:
-        current_iteration += epoch["count"]  # 累加当前epoch的迭代次数
-        val_iteration_points.append(current_iteration)
-
-    # 计算训练损失曲线的x坐标（偏移半个epoch）
-    # 这里将每个训练损失点放在其对应 epoch 区间的中间位置（即当前验证点左移半个 epoch），
-    # 这样可以更直观地反映该 epoch 内的训练损失均值与验证损失的时间关系。
-    train_x = [val_iteration_points[i] - epoch["count"] / 2 for i, epoch in enumerate(metrics["train_loss"])]
-
-    # 绘制训练损失曲线和标准差区间
-    ax.plot(train_x, [epoch["mean"] for epoch in metrics["train_loss"]], label="Train Loss", color="red", linestyle="-", marker=".")
-    train_upper = [epoch["mean"] + epoch["std"] for epoch in metrics["train_loss"]]
-    train_lower = [epoch["mean"] - epoch["std"] for epoch in metrics["train_loss"]]
-    ax.fill_between(train_x, train_upper, train_lower, color="red", alpha=0.2)
-
-    ax.plot(val_iteration_points, [epoch["mean"] for epoch in metrics["val_loss"]], label="Validation Loss", color="blue", linestyle="-", marker=".")
-    val_upper = [epoch["mean"] + epoch["std"] for epoch in metrics["val_loss"]]
-    val_lower = [epoch["mean"] - epoch["std"] for epoch in metrics["val_loss"]]
-    ax.fill_between(val_iteration_points, val_upper, val_lower, color="blue", alpha=0.2)
-
-    # 设置X轴为整数刻度
-    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-
-    # 设置坐标轴标签和标题
-    ax.set_ylabel("Loss")
-    ax.set_xlabel("Iteration")
-    ax.set_title("Training Process")
-
-    # 添加图例和网格
-    ax.legend(loc="upper right")
-    ax.grid(True, linestyle="--", alpha=0.5)
-
-    # 保存图形
-    plt.tight_layout()
-    pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(img_path, dpi=300, bbox_inches="tight")
-
-    # 展示图形
-    if show_training_process:
-        plt.show()
-
-    plt.close()
+    return loss_results
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
@@ -519,7 +458,6 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-do", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
     parser.add_argument("-dw", "--duration-weight", default=DEFAULT_DUARTION_WEIGHT, type=float, help="持续时间损失的权重系数，默认为 %(default)s")
-    parser.add_argument("-k", "--show-training-process", action="store_true", help="展示训练过程图表，而不仅仅是保存到`<ckpt_path>/statistics.png`")
     return parser.parse_args(args)
 
 
@@ -528,7 +466,8 @@ def main(args: argparse.Namespace):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 读取检查点
-    model_state_dict, model_config, optimiezer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
+    print("读取检查点 ...")
+    tokenizer, model_state_dict, model_config, tag_label_encoder, optimiezer_state_dict, completed_epochs = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
     model = FastSpeech2(model_config, dropout=args.dropout)
@@ -550,49 +489,98 @@ def main(args: argparse.Namespace):
     scaler = GradScaler(device)
 
     # 加载训练数据集
+    print("加载训练集 ...")
     train_dataset = TkTTSDataset(args.train_dataset)
+    print("加载训练集批次采样器 ...")
     train_sampler = TkTTSDatasetSampler(train_dataset, args.train_max_batch_tokens)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
+        print("加载验证集 ...")
         val_dataset = TkTTSDataset(args.val_dataset)
+        print("加载验证集批次采样器 ...")
         val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 开始训练
     for epoch in range(args.num_epochs):
         # 计算累积 Epoch 数
-        current_epoch = len(metrics["train_loss"]) + epoch
+        current_epoch = completed_epochs + epoch
+
+        # 创建一个 SummaryWriter 实例，用于记录训练过程中的指标和可视化数据
+        writer = SummaryWriter(args.ckpt_path / f"logdir/Epoch {current_epoch + 1}")
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
         train_loss = train(model, train_loader, optimizer, scaler, args.duration_weight, accumulation_steps=args.accumulation_steps, device=device)
 
-        # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
+        # 如果有验证集，进行验证并记录结果
         if args.val_dataset:
             val_sampler.set_epoch(current_epoch)
-            val_loss = validate(model, val_loader, args.duration_weight, device)
-        else:
-            val_loss = [float("nan")]
+            val_results = validate(model, val_loader, args.duration_weight, device)
 
-        # 计算并添加损失平均值和标准差到指标
-        train_loss = np.array(train_loss)
-        val_loss = np.array(val_loss)
-        metrics["train_loss"].append({"mean": train_loss.mean().item(), "std": train_loss.std().item(), "count": len(train_loss)})
-        metrics["val_loss"].append({"mean": val_loss.mean().item(), "std": val_loss.std().item()})
+            # 绘制损失分布直方图
+            for loss_type, loss in [
+                ("Audio", [loss for _, _, _, (loss, _, _, _) in val_results]),
+                ("Duration", [loss for _, _, _, (_, loss, _, _) in val_results]),
+                ("Pitch", [loss for _, _, _, (_, _, loss, _) in val_results]),
+                ("Energy", [loss for _, _, _, (_, _, _, loss) in val_results]),
+            ]:
+                writer.add_histogram(f"Validate/{loss_type} Loss Distribution", np.array(loss))
+
+            # 创建各种验证指标的散点图
+            for title, x_label, y_label, x, y in [
+                # 预测长度与目标长度
+                ("Predicted vs True Length", "Predicted Length", "True Length", *zip(*[(pred_length, target_length) for _, pred_length, target_length, _ in val_results])),
+                # 文本长度与各类损失
+                ("Text Length vs Audio Loss", "Text Length", "Audio Loss", *zip(*[(text_length, audio_loss) for text_length, _, _, (audio_loss, _, _, _) in val_results])),
+                ("Text Length vs Duration Loss", "Text Length", "Duration Loss", *zip(*[(text_length, duration_loss) for text_length, _, _, (_, duration_loss, _, _) in val_results])),
+                ("Text Length vs Pitch Loss", "Text Length", "Pitch Loss", *zip(*[(text_length, pitch_loss) for text_length, _, _, (_, _, pitch_loss, _) in val_results])),
+                ("Text Length vs Energy Loss", "Text Length", "Energy Loss", *zip(*[(text_length, energy_loss) for text_length, _, _, (_, _, _, energy_loss) in val_results])),
+            ]:
+                # 创建图形和坐标轴
+                figure, axis = plt.subplots(figsize=(10, 6))
+
+                # 绘制散点图
+                axis.scatter(x, y)
+
+                # 设置坐标轴标签和标题
+                axis.set_xlabel(x_label)
+                axis.set_ylabel(y_label)
+                axis.set_title(title)
+
+                # 添加网格线
+                axis.grid(True, linestyle="--", alpha=0.3)
+  
+                # 优化布局
+                plt.tight_layout()
+
+                # 将图形添加到记录器
+                writer.add_figure(f"Validate/{title}", figure)
+
+        # 记录训练损失
+        for n_iter, (audio_loss, duration_loss, pitch_loss, energy_loss) in enumerate(train_loss):
+            writer.add_scalar("Train/Audio Loss", audio_loss, n_iter)
+            writer.add_scalar("Train/Duration Loss", duration_loss, n_iter)
+            writer.add_scalar("Train/Pitch Loss", pitch_loss, n_iter)
+            writer.add_scalar("Train/Energy Loss", energy_loss, n_iter)
+
+        # 记录模型的文本和标签嵌入
+        writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag="Text Embedding")
+        writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag="Tag Embedding")
+
+        # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
+        writer.close()
 
     # 保存当前模型的检查点
     save_checkpoint(
         args.ckpt_path,
         model.cpu().state_dict(),
         optimizer.state_dict(),
-        metrics,
+        completed_epochs + args.num_epochs
     )
-    print(f"训练完成，模型已保存到 {args.ckpt_path}。")
-
-    # 绘制训练过程中的损失曲线
-    plot_training_process(metrics, args.ckpt_path / "statistics.png", show_training_process=args.show_training_process)
+    print(f"训练完成，模型已保存到 {args.ckpt_path}，训练过程记录保存到 {args.ckpt_path / 'logdir'}，你可以通过 `tensorboard --logdir {args.ckpt_path / 'logdir'}` 查看。")
 
 
 if __name__ == "__main__":
