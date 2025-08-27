@@ -574,9 +574,9 @@ def main(args: argparse.Namespace):
             writer.add_scalar("Train/Pitch Loss", pitch_loss, current_epoch * len(train_loss) + n_iter)
             writer.add_scalar("Train/Energy Loss", energy_loss, current_epoch * len(train_loss) + n_iter)
 
-        # 记录模型的文本和标签嵌入
-        writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Epoch {current_epoch + 1}/Text Embedding")
-        writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag=f"Epoch {current_epoch + 1}/Tag Embedding")
+    # 记录模型的文本和标签嵌入，覆盖上一个记录
+    writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
+    writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag=f"Tag Embedding")
 
     # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
     writer.close()
