@@ -193,15 +193,15 @@ class Conv(nn.Module):
     一维卷积层，自动处理输入张量的维度转换
     该类继承自 nn.Module，封装了 nn.Conv1d 并自动设置 padding 为`same`模式
     在保持序列长度不变的前提下进行一维卷积操作
-    
+
     工作流程：
     1. 在初始化时自动设置卷积层的padding模式为`same`
-    2. 在前向传播时自动转换输入张量维度以适应Conv1d的要求
+    2. 在前向传播时自动转换输入张量维度以适应 Conv1d 的要求
     3. 执行卷积操作后再将维度转换回原始格式
-    
+
     Inputs:
         x: 输入张量，形状为 [batch_size, seq_len, in_channels]
-        
+
     Outputs:
         输出张量，形状为 [batch_size, seq_len, out_channels]
     """
