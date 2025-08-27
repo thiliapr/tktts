@@ -140,9 +140,9 @@ def main(args: argparse.Namespace):
 
     # 创建 SummaryWriter，可视化模型初始化状态
     shutil.rmtree(args.ckpt_path / "logdir", ignore_errors=True)
-    writer = SummaryWriter(args.ckpt_path / "logdir/init")
-    writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag="Text Embedding")
-    writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag="Tag Embedding")
+    writer = SummaryWriter(args.ckpt_path / "logdir/default")
+    writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag="Init/Text Embedding")
+    writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag="Init/Tag Embedding")
     writer.close()
 
     # 保存为检查点

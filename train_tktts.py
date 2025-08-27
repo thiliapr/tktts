@@ -503,13 +503,13 @@ def main(args: argparse.Namespace):
         val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
+    # 创建一个 SummaryWriter 实例，用于记录训练过程中的指标和可视化数据
+    writer = SummaryWriter(args.ckpt_path / f"logdir/default")
+
     # 开始训练
     for epoch in range(args.num_epochs):
         # 计算累积 Epoch 数
         current_epoch = completed_epochs + epoch
-
-        # 创建一个 SummaryWriter 实例，用于记录训练过程中的指标和可视化数据
-        writer = SummaryWriter(args.ckpt_path / f"logdir/Epoch {current_epoch + 1}")
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
@@ -527,7 +527,7 @@ def main(args: argparse.Namespace):
                 ("Pitch", [loss for _, _, _, (_, _, loss, _) in val_results]),
                 ("Energy", [loss for _, _, _, (_, _, _, loss) in val_results]),
             ]:
-                writer.add_histogram(f"Validate/{loss_type} Loss Distribution", np.array(loss))
+                writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_type} Loss Distribution", np.array(loss))
 
             # 创建各种验证指标的散点图
             for title, x_label, y_label, x, y in [
@@ -557,21 +557,21 @@ def main(args: argparse.Namespace):
                 plt.tight_layout()
 
                 # 将图形添加到记录器
-                writer.add_figure(f"Validate/{title}", figure)
+                writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
         # 记录训练损失
         for n_iter, (audio_loss, duration_loss, pitch_loss, energy_loss) in enumerate(train_loss):
-            writer.add_scalar("Train/Audio Loss", audio_loss, n_iter)
-            writer.add_scalar("Train/Duration Loss", duration_loss, n_iter)
-            writer.add_scalar("Train/Pitch Loss", pitch_loss, n_iter)
-            writer.add_scalar("Train/Energy Loss", energy_loss, n_iter)
+            writer.add_scalar("Train/Audio Loss", audio_loss, current_epoch * len(train_loss) + n_iter)
+            writer.add_scalar("Train/Duration Loss", duration_loss, current_epoch * len(train_loss) + n_iter)
+            writer.add_scalar("Train/Pitch Loss", pitch_loss, current_epoch * len(train_loss) + n_iter)
+            writer.add_scalar("Train/Energy Loss", energy_loss, current_epoch * len(train_loss) + n_iter)
 
         # 记录模型的文本和标签嵌入
-        writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag="Text Embedding")
-        writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag="Tag Embedding")
+        writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Epoch {current_epoch + 1}/Text Embedding")
+        writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag=f"Epoch {current_epoch + 1}/Tag Embedding")
 
-        # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
-        writer.close()
+    # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
+    writer.close()
 
     # 保存当前模型的检查点
     save_checkpoint(
