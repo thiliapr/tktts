@@ -190,25 +190,31 @@ class MultiheadAttention(nn.Module):
 
 class Conv(nn.Module):
     """
-    Conv 是一个自定义的卷积层。它在输入张量的维度上进行转换，以适应多头注意力机制的输入要求。
-    该层将输入张量从形状 [batch_size, seq_len, dim_model] 转换为 [batch_size, dim_model, seq_len]，以便进行卷积操作。
-    在 forward 方法中，输入张量会先进行维度转换，然后调用父类的 forward 方法进行卷积操作，最后再将输出张量转换回原始形状 [batch_size, seq_len, dim_model]。
-
-    Inputs:
-        x: 输入张量，形状为 (batch_size, seq_len, dim_model)
+    一维卷积层，自动处理输入张量的维度转换
+    该类继承自 nn.Module，封装了 nn.Conv1d 并自动设置 padding 为`same`模式
+    在保持序列长度不变的前提下进行一维卷积操作
     
+    工作流程：
+    1. 在初始化时自动设置卷积层的padding模式为`same`
+    2. 在前向传播时自动转换输入张量维度以适应Conv1d的要求
+    3. 执行卷积操作后再将维度转换回原始格式
+    
+    Inputs:
+        x: 输入张量，形状为 [batch_size, seq_len, in_channels]
+        
     Outputs:
-        处理后的张量
+        输出张量，形状为 [batch_size, seq_len, out_channels]
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, *args, **kwargs):
         super().__init__()
-        self.model = nn.Conv1d(*args, **kwargs)
+        kwargs["padding"] = "same"
+        self.model = nn.Conv1d(in_channels, out_channels, kernel_size, *args, **kwargs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.transpose(1, 2)  # 转换为 [batch_size, dim_model, seq_len]
-        x = self.model(x)  # 调用父类的 forward 方法
-        x = x.transpose(1, 2)  # 恢复为 [batch_size, seq_len, dim_model]
+        x = x.transpose(1, 2)  # 转换为 [batch_size, in_channels, seq_len]
+        x = self.model(x)  # 调用父类的 forward 方法，[batch_size, out_channels, seq_len]
+        x = x.transpose(1, 2)  # 恢复为 [batch_size, seq_len, out_channels]
         return x  # 返回处理后的张量
 
 
@@ -245,9 +251,9 @@ class FFTBlock(nn.Module):
 
         # 自注意力和前馈网络
         self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
-        self.conv1 = Conv(dim_model, dim_feedforward, conv1_kernel_size, padding="same", device=device)
+        self.conv1 = Conv(dim_model, dim_feedforward, conv1_kernel_size, device=device)
         self.activation = nn.GELU()
-        self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
+        self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, device=device)
 
         # 归一化和缩放
         self.attention_norm = ScaleNorm(dim_model)
@@ -317,8 +323,8 @@ class VariancePredictor(nn.Module):
 
     def __init__(self, dim_model: int, kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
-        self.conv1 = Conv(dim_model, dim_model, kernel_size, padding="same", device=device)
-        self.conv2 = Conv(dim_model, dim_model, kernel_size, padding="same", device=device)
+        self.conv1 = Conv(dim_model, dim_model, kernel_size, device=device)
+        self.conv2 = Conv(dim_model, dim_model, kernel_size, device=device)
         self.output_layer = nn.Linear(dim_model, 1, device=device)
         self.norm1 = ScaleNorm(dim_model)
         self.norm2 = ScaleNorm(dim_model)
@@ -407,7 +413,7 @@ class DifferentiableLengthRegulator(nn.Module):
         logits = -torch.abs(frame_distances) / self.temperature
 
         # 应用填充掩码
-        logits.masked_fill_(padding_mask[:, None, :].expand_as(logits), -torch.inf)
+        logits = logits.masked_fill(padding_mask[:, None, :].expand_as(logits), -torch.inf)
 
         # 计算归一化权重 [batch_size, total_frames, seq_len]
         weights = torch.softmax(logits, dim=-1)
@@ -417,23 +423,78 @@ class DifferentiableLengthRegulator(nn.Module):
         return expanded_features
 
 
+class PostNet(nn.Module):
+    """
+    后处理网络，用于语音合成中的梅尔频谱图精细化处理。
+    该网络由多个卷积层和缩放归一化层组成，使用 tanh 激活函数和 dropout 正则化。
+    通过卷积操作增强频谱图的局部特征表达，并通过缩放归一化稳定训练过程。
+
+    工作流程：
+        1. 对输入频谱图进行掩码处理，将填充位置置零
+        2. 通过多个卷积+归一化+激活层序列处理特征
+        3. 最终通过一个卷积层输出精细化后的频谱图
+
+    Inputs:
+        x: 输入梅尔频谱图，形状为 [batch_size, seq_len, num_mels]
+        padding_mask: 填充掩码，True 表示填充位置
+
+    Outputs:
+        精细化后的梅尔频谱图，形状与输入相同 [batch_size, seq_len, num_mels]
+    """
+
+    def __init__(self, num_mels: int, hidden_dim: int, kernel_size: int, num_layers: int, dropout: float = 0., device: Optional[torch.device] = None):
+        super().__init__()
+        self.layers = nn.ModuleList()
+
+        # 添加第一个卷积层（输入层）
+        self.layers.append(nn.Sequential(Conv(num_mels, hidden_dim, kernel_size, device=device), ScaleNorm(hidden_dim, device=device)))
+    
+        # 添加 num_layers - 2 个隐藏层
+        self.layers.extend(nn.Sequential(Conv(hidden_dim, hidden_dim, kernel_size, device=device), ScaleNorm(hidden_dim, device=device)) for _ in range(num_layers - 2))
+
+        # 输出层卷积，恢复原始维度
+        self.output_conv = Conv(hidden_dim, num_mels, kernel_size, device=device)
+        self.dropout = nn.Dropout(dropout)
+
+        # 初始化权重
+        for layer in [*[seq[0] for seq in self.layers], self.output_conv]:
+            nn.init.xavier_uniform_(layer.model.weight)
+            nn.init.zeros_(layer.model.bias)
+
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
+        # 对填充位置进行掩码处理
+        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
+
+        # 通过输入层、所有隐藏层
+        for layer in self.layers:
+            x = self.dropout(F.tanh(layer(x)))
+            # 再次应用掩码，确保填充位置不影响后续计算
+            x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
+
+        # 最终输出层
+        return self.dropout(self.output_conv(x))
+
+
 class FastSpeech2Config(NamedTuple):
     """
     FastSpeech2 的配置类，包含模型的超参数设置。
 
     Attributes:
-        vocab_size: 词汇表大小。
-        num_tags: 标签数量，用于控制生成。
-        num_mels: 梅尔频谱的维度。
-        num_heads: 注意力头的数量。
-        dim_head: 每个注意力头的维度。
-        dim_feedforward: 前馈网络的隐藏层维度。
-        fft_conv1_kernel_size: 第一个 FFT 卷积层的卷积核大小。
-        fft_conv2_kernel_size: 第二个 FFT 卷积层的卷积核大小。
-        predictor_kernel_size: 预测器的卷积核大小。
-        variance_bins: 变异性预测的 bins 数量。
-        num_encoder_layers: 编码器层的数量。
-        num_decoder_layers: 解码器层的数量。
+        vocab_size: 词汇表大小
+        num_tags: 标签数量，用于控制生成
+        num_mels: 梅尔频谱的维度
+        num_heads: 注意力头的数量
+        dim_head: 每个注意力头的维度
+        dim_feedforward: 前馈网络的隐藏层维度
+        fft_conv1_kernel_size: 第一个 FFT 卷积层的卷积核大小
+        fft_conv2_kernel_size: 第二个 FFT 卷积层的卷积核大小
+        predictor_kernel_size: 预测器的卷积核大小
+        variance_bins: 变异性预测的 bins 数量
+        postnet_hidden_dim: 后处理网络的隐藏层维度
+        postnet_kernel_size: 后处理网络中卷积层的卷积核大小
+        num_encoder_layers: 编码器层的数量
+        num_decoder_layers: 解码器层的数量
+        num_postnet_layers: 后处理网络中卷积层的数量
     """
     vocab_size: int
     num_tags: int
@@ -445,8 +506,11 @@ class FastSpeech2Config(NamedTuple):
     fft_conv2_kernel_size: int
     predictor_kernel_size: int
     variance_bins: int
+    postnet_hidden_dim: int
+    postnet_kernel_size: int
     num_encoder_layers: int
     num_decoder_layers: int
+    num_postnet_layers: int
 
 
 class FastSpeech2(nn.Module):
@@ -462,6 +526,7 @@ class FastSpeech2(nn.Module):
         5. 将音高和能量作为附加特征添加到上下文表示中。
         6. 使用长度调节器调整序列长度。
         7. 解码器处理调整后的表示，生成梅尔频谱预测。
+        8. 使用 PostNet 精细化梅尔频谱，并进行残差连接。
 
     Args:
         config: FastSpeech2Config 配置对象，包含模型的超参数设置。
@@ -469,22 +534,24 @@ class FastSpeech2(nn.Module):
         device: 设备参数，用于指定模型运行的设备。
 
     Inputs:
-        text: 输入文本的张量，形状为 (batch_size, seq_len)。
+        text: 输入文本的张量，形状为 (batch_size, text_len)。
         positive_prompt: 正向提示标签张量，形状为 (batch_size, num_positive_prompts)。
         negative_prompt: 负向提示标签张量，形状为 (batch_size, num_negative_prompts)。
-        text_padding_mask: 文本填充掩码，形状为 (batch_size, seq_len)，填充位置为 True，非填充位置为 False。
+        text_padding_mask: 文本填充掩码，形状同 text。填充位置为 True，非填充位置为 False。
         positive_prompt_mask: 正向提示标签填充掩码，形状同 positive_prompt。
         negative_prompt_mask: 负向提示标签填充掩码，形状同 negative_prompt。
         duration_sum_target: 总时长目标张量，形状为 (batch_size)。
-        pitch_target: 音高目标张量，形状为 (batch_size, seq_len)。
-        energy_target: 能量目标张量，形状为 (batch_size, seq_len)。
+        pitch_target: 音高目标张量，形状为 (batch_size, audio_len)。
+        energy_target: 能量目标张量，形状为 (batch_size, audio_len)。
 
     Outputs:
-        返回一个元组，包含梅尔频谱预测、时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
-        - mel_prediction: (batch_size, seq_len, num_mels)
-        - duration_prediction: (batch_size, seq_len)
-        - pitch_prediction: (batch_size, seq_len)
-        - energy_prediction: (batch_size, seq_len)
+        返回一个元组，包含后处理网络输出的梅尔频谱预测、原始梅尔频谱预测、时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
+        - postnet_prediction: (batch_size, audio_len, num_mels)
+        - mel_prediction: (batch_size, audio_len, num_mels)
+        - mel_prediction: (batch_size, audio_len, num_mels)
+        - duration_prediction: (batch_size, audio_len)
+        - pitch_prediction: (batch_size, audio_len)
+        - energy_prediction: (batch_size, audio_len)
         - audio_padding_mask: (batch_size)
     """
 
@@ -517,6 +584,9 @@ class FastSpeech2(nn.Module):
         # 梅尔频谱预测器
         self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
 
+        # 后处理网络
+        self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers)
+
     def prompt_embedding(self, prompt: torch.LongTensor, padding_mask: Optional[torch.BoolTensor]):
         """
         获取提示词的嵌入表示，并对填充部分进行处理。
@@ -538,7 +608,7 @@ class FastSpeech2(nn.Module):
         tag_embedding = self.tag_embedding(prompt)  # [batch_size, num_tags, dim_model]
 
         # 将填充部分置零
-        tag_embedding.masked_fill_(padding_mask.unsqueeze(-1), 0)
+        tag_embedding = tag_embedding.masked_fill(padding_mask.unsqueeze(-1), 0)
 
         # 计算有效标签数量
         valid_tag_count = (~padding_mask).sum(dim=1, keepdim=True)  # [batch_size, 1]
@@ -560,7 +630,7 @@ class FastSpeech2(nn.Module):
         duration_sum_target: Optional[torch.Tensor] = None,
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
         # 如果没有提供填充掩码，则创建一个全为 False 的掩码
         if text_padding_mask is None:
             text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
@@ -586,7 +656,7 @@ class FastSpeech2(nn.Module):
         duration_prediction = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
 
         # 对时长应用填充掩码
-        duration_prediction.masked_fill_(text_padding_mask, 0)
+        duration_prediction = duration_prediction.masked_fill(text_padding_mask, 0)
 
         # 防止时长小于零
         duration = duration_prediction.clamp(min=0)
@@ -629,4 +699,7 @@ class FastSpeech2(nn.Module):
 
         # 梅尔频谱预测
         mel_prediction = self.mel_predictor(x)  # [batch_size, audio_len, num_mels]
-        return mel_prediction, duration_prediction, pitch_prediction, energy_prediction, audio_padding_mask
+
+        # 通过后处理网络
+        postnet_prediction = mel_prediction + self.postnet(mel_prediction, audio_padding_mask)
+        return postnet_prediction, mel_prediction, duration_prediction, pitch_prediction, energy_prediction, audio_padding_mask

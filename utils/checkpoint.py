@@ -198,8 +198,10 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> FastSpeech2Co
     fft_conv2_kernel_size = model_state["encoder.0.conv2.model.weight"].size(2)
     predictor_kernel_size = model_state["pitch_predictor.conv1.model.weight"].size(2)
     variance_bins = model_state["pitch_embedding.weight"].size(0)
+    _, postnet_hidden_dim, postnet_kernel_size = model_state["postnet.output_conv.model.weight"].size()
     num_encoder_layers = len({int(key.split(".")[1]) for key in (key for key in model_state if key.startswith("encoder."))})
     num_decoder_layers = len({int(key.split(".")[1]) for key in (key for key in model_state if key.startswith("decoder."))})
+    num_postnet_layers = len({int(key.split(".")[2]) for key in (key for key in model_state if key.startswith("postnet.layers."))}) + 1
     return FastSpeech2Config(
         vocab_size=vocab_size,
         num_tags=num_tags,
@@ -210,7 +212,10 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> FastSpeech2Co
         fft_conv1_kernel_size=fft_conv1_kernel_size,
         fft_conv2_kernel_size=fft_conv2_kernel_size,
         predictor_kernel_size=predictor_kernel_size,
+        postnet_hidden_dim=postnet_hidden_dim,
+        postnet_kernel_size=postnet_kernel_size,
         variance_bins=variance_bins,
         num_encoder_layers=num_encoder_layers,
-        num_decoder_layers=num_decoder_layers
+        num_decoder_layers=num_decoder_layers,
+        num_postnet_layers=num_postnet_layers
     )

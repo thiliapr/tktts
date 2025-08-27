@@ -213,6 +213,7 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
 
 
 def fastspeech2_loss(
+    postnet_pred: torch.Tensor,
     audio_pred: torch.Tensor,
     duration_pred: torch.Tensor,
     pitch_pred: torch.Tensor,
@@ -223,7 +224,7 @@ def fastspeech2_loss(
     energy_target: torch.Tensor,
     audio_padding_mask: torch.BoolTensor,
     duration_weight: float
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     计算 FastSpeech2 模型的复合损失函数，包含音频重建、时长、音高和能量损失。
 
@@ -231,11 +232,12 @@ def fastspeech2_loss(
     时长损失使用总时长比较，其他损失使用逐帧掩码计算，最后返回加权和。
 
     Args:
-        audio_pred: 预测的梅尔频谱图，形状为 [batch_size, seq_len, mel_dim]
+        postnet_pred: 经过后处理网络的梅尔频谱预测，形状为 [batch_size, seq_len, num_mels]
+        audio_pred: 预测的原始梅尔频谱图，形状为 [batch_size, seq_len, num_mels]
         duration_pred: 预测的音素时长，形状为 [batch_size, phoneme_len]
         pitch_pred: 预测的音高特征，形状为 [batch_size, seq_len]
         energy_pred: 预测的能量特征，形状为 [batch_size, seq_len]
-        audio_target: 真实的梅尔频谱图，形状为 [batch_size, seq_len, mel_dim]
+        audio_target: 真实的梅尔频谱图，形状为 [batch_size, seq_len, num_mels]
         duration_sum_target: 真实的总时长，形状为 [batch_size]
         pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
         energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
@@ -243,7 +245,7 @@ def fastspeech2_loss(
         duration_weight: 持续时间损失的权重系数
 
     Returns:
-        各分量（梅尔频谱、时长总和、音高、能量）损失值，标量张量
+        各分量（后处理网络、原始梅尔频谱、时长总和、音高、能量）损失值，标量张量
     """
     def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor):
         "计算掩码区域的L1损失，仅对有效帧求平均"
@@ -269,12 +271,13 @@ def fastspeech2_loss(
     duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target) * duration_weight
 
     # 计算各分量损失
+    postnet_loss = masked_l1_loss(postnet_pred, audio_target, audio_padding_mask)
     audio_loss = masked_l1_loss(audio_pred, audio_target, audio_padding_mask)
     pitch_loss = masked_l1_loss(pitch_pred, pitch_target, audio_padding_mask)
     energy_loss = masked_l1_loss(energy_pred, energy_target, audio_padding_mask)
 
     # 返回各分量损失
-    return audio_loss, duration_loss, pitch_loss, energy_loss
+    return postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss
 
 
 def train(
@@ -285,7 +288,7 @@ def train(
     duration_weight: float,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[float, float, float, float]]:
+) -> list[tuple[float, float, float, float, float]]:
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
 
@@ -308,7 +311,8 @@ def train(
 
     Returns:
         每个梯度更新步骤的平均损失值列表，包括
-        - 梅尔频谱损失
+        - 后处理网络梅尔频谱损失
+        - 原始梅尔频谱损失
         - 时长总和损失
         - 音高预测损失
         - 能量预测损失
@@ -330,7 +334,7 @@ def train(
     progress_bar = tqdm(total=num_iterators, desc="Train")
 
     # 当前累积步骤的总损失
-    acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
+    acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
 
     # 提前清空梯度
     optimizer.zero_grad()
@@ -342,14 +346,15 @@ def train(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model.forward(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            audio_loss, duration_loss, pitch_loss, energy_loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
-            loss = audio_loss + duration_loss + pitch_loss + energy_loss
+            postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
+            postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            loss = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
         # 梯度缩放与反向传播
         scaler.scale(loss).backward()
 
         # 更新累积损失
+        acc_postnet_loss += postnet_loss.item() / accumulation_steps
         acc_audio_loss += audio_loss.item() / accumulation_steps
         acc_duration_loss += duration_loss.item() / accumulation_steps
         acc_pitch_loss += pitch_loss.item() / accumulation_steps
@@ -361,8 +366,8 @@ def train(
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
 
-            loss_results.append((acc_audio_loss, acc_duration_loss, acc_pitch_loss, acc_energy_loss))  # 记录平均损失
-            acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0  # 重置累积损失
+            loss_results.append((acc_postnet_loss, acc_audio_loss, acc_duration_loss, acc_pitch_loss, acc_energy_loss))  # 记录平均损失
+            acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0  # 重置累积损失
 
         # 更新进度条
         progress_bar.set_postfix(loss=loss.item())  # 更新进度条
@@ -377,7 +382,7 @@ def validate(
     dataloader: DataLoader,
     duration_weight: float,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[int, int, int, tuple[float, float, float, float]]]:
+) -> list[tuple[int, int, int, tuple[float, float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
     计算模型在验证集上的各项损失值，包括音频重建损失、持续时间损失、音高损失和能量损失
@@ -393,7 +398,7 @@ def validate(
 
     Returns:
         包含每个样本详细损失信息的列表，每个元素为元组：
-        (文本序列长度, 预测音频长度, 目标音频长度, (音频损失, 持续时间损失, 音高损失, 能量损失))
+        (文本序列长度, 预测音频长度, 目标音频长度, (后处理音频损失, 原始音频损失, 持续时间损失, 音高损失, 能量损失))
 
     Examples:
         >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
@@ -413,7 +418,7 @@ def validate(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
+            postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
 
             # 填充序列，方便计算损失
             batch_size, pred_audio_length, num_mels = audio_pred.size()
@@ -428,7 +433,7 @@ def validate(
                 energy_target = energy_target[:, :pred_audio_length]
 
             # 计算损失
-            all_loss = fastspeech2_loss(audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length.to(dtype=duration_pred.dtype), pitch_target, energy_target, audio_padding_mask, duration_weight)
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length.to(dtype=duration_pred.dtype), pitch_target, energy_target, audio_padding_mask, duration_weight)
 
         # 记录当前批次的损失信息
         loss_results.append((text_sequences.size(1), pred_audio_length, target_audio_length, tuple(loss.item() for loss in all_loss)))
@@ -522,10 +527,11 @@ def main(args: argparse.Namespace):
 
             # 绘制损失分布直方图
             for loss_type, loss in [
-                ("Audio", [loss for _, _, _, (loss, _, _, _) in val_results]),
-                ("Duration", [loss for _, _, _, (_, loss, _, _) in val_results]),
-                ("Pitch", [loss for _, _, _, (_, _, loss, _) in val_results]),
-                ("Energy", [loss for _, _, _, (_, _, _, loss) in val_results]),
+                ("Post-Net Audio", [loss for _, _, _, (loss, _, _, _, _) in val_results]),
+                ("Original Audio", [loss for _, _, _, (_, loss, _, _, _) in val_results]),
+                ("Duration", [loss for _, _, _, (_, _, loss, _, _) in val_results]),
+                ("Pitch", [loss for _, _, _, (_, _, _, loss, _) in val_results]),
+                ("Energy", [loss for _, _, _, (_, _, _, _, loss) in val_results]),
             ]:
                 writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_type} Loss Distribution", np.array(loss))
 
@@ -534,10 +540,11 @@ def main(args: argparse.Namespace):
                 # 预测长度与目标长度
                 ("Predicted vs True Length", "Predicted Length", "True Length", *zip(*[(pred_length, target_length) for _, pred_length, target_length, _ in val_results])),
                 # 文本长度与各类损失
-                ("Text Length vs Audio Loss", "Text Length", "Audio Loss", *zip(*[(text_length, audio_loss) for text_length, _, _, (audio_loss, _, _, _) in val_results])),
-                ("Text Length vs Duration Loss", "Text Length", "Duration Loss", *zip(*[(text_length, duration_loss) for text_length, _, _, (_, duration_loss, _, _) in val_results])),
-                ("Text Length vs Pitch Loss", "Text Length", "Pitch Loss", *zip(*[(text_length, pitch_loss) for text_length, _, _, (_, _, pitch_loss, _) in val_results])),
-                ("Text Length vs Energy Loss", "Text Length", "Energy Loss", *zip(*[(text_length, energy_loss) for text_length, _, _, (_, _, _, energy_loss) in val_results])),
+                ("Text Length vs Post-Net Audio Loss", "Text Length", "Post-Net Audio Loss", *zip(*[(text_length, loss) for text_length, _, _, (loss, _, _, _, _) in val_results])),
+                ("Text Length vs Original Audio Loss", "Text Length", "Original Audio Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, loss, _, _, _) in val_results])),
+                ("Text Length vs Duration Loss", "Text Length", "Duration Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, _, loss, _, _) in val_results])),
+                ("Text Length vs Pitch Loss", "Text Length", "Pitch Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, _, _, loss, _) in val_results])),
+                ("Text Length vs Energy Loss", "Text Length", "Energy Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, _, _, _, loss) in val_results])),
             ]:
                 # 创建图形和坐标轴
                 figure, axis = plt.subplots(figsize=(10, 6))
@@ -560,8 +567,9 @@ def main(args: argparse.Namespace):
                 writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
         # 记录训练损失
-        for n_iter, (audio_loss, duration_loss, pitch_loss, energy_loss) in enumerate(train_loss):
-            writer.add_scalar("Train/Audio Loss", audio_loss, current_epoch * len(train_loss) + n_iter)
+        for n_iter, (postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss) in enumerate(train_loss):
+            writer.add_scalar("Train/Post-Net Audio Loss", postnet_loss, current_epoch * len(train_loss) + n_iter)
+            writer.add_scalar("Train/Original Audio Loss", audio_loss, current_epoch * len(train_loss) + n_iter)
             writer.add_scalar("Train/Duration Loss", duration_loss, current_epoch * len(train_loss) + n_iter)
             writer.add_scalar("Train/Pitch Loss", pitch_loss, current_epoch * len(train_loss) + n_iter)
             writer.add_scalar("Train/Energy Loss", energy_loss, current_epoch * len(train_loss) + n_iter)
