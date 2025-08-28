@@ -77,7 +77,7 @@ def main(args: argparse.Namespace):
     negative_prompt = torch.tensor([negative_prompt]) if negative_prompt else None
 
     # 生成音频
-    mel_prediction, _, _, _, _ = model.forward(
+    mel_prediction, _, _, _, _, _ = model(
         text,
         positive_prompt,
         negative_prompt,
