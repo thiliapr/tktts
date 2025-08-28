@@ -565,9 +565,9 @@ class FastSpeech2(nn.Module):
         self.tag_embedding = nn.Embedding(config.num_tags, self.dim_model, device=device)
 
         # 编码器、解码器
-        module = FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, dropout, device)
-        self.encoder = nn.ModuleList(copy.deepcopy(module) for _ in range(config.num_encoder_layers ))
-        self.decoder = nn.ModuleList(copy.deepcopy(module) for _ in range(config.num_decoder_layers ))
+        layer = FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, dropout, device)
+        self.encoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_encoder_layers))
+        self.decoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_decoder_layers))
 
         # 预测器
         self.duration_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
