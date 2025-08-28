@@ -89,7 +89,7 @@ def convert(
 
         # 使用 stonemask 修正
         f0_refined = pw.stonemask(audio, f0, time_axis, sample_rate)
-        f0_log = np.log(f0_log + 1e-8)
+        f0_log = np.log(f0_refined + 1e-8)
 
         # 频谱包络
         sp = pw.cheaptrick(audio, f0_refined, time_axis, sample_rate)
