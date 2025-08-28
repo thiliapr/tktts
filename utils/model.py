@@ -641,11 +641,11 @@ class FastSpeech2(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
         # 如果没有提供填充掩码，则创建一个全为 False 的掩码
         if text_padding_mask is None:
-            text_padding_mask = torch.zeros_like(text, dtype=torch.bool)  # [batch_size, text_len]
+            text_padding_mask = torch.zeros_like(text, device=text.device, dtype=bool)  # [batch_size, text_len]
         if positive_prompt is not None and positive_prompt_mask is None:
-            positive_prompt_mask = torch.zeros_like(positive_prompt, dtype=torch.bool)  # [batch_size, num_pos_tags]
+            positive_prompt_mask = torch.zeros_like(positive_prompt, device=text.device, dtype=bool)  # [batch_size, num_pos_tags]
         if negative_prompt is not None and negative_prompt_mask is None:
-            negative_prompt_mask = torch.zeros_like(negative_prompt, dtype=torch.bool)  # [batch_size, num_neg_tags]
+            negative_prompt_mask = torch.zeros_like(negative_prompt, device=text.device, dtype=bool)  # [batch_size, num_neg_tags]
 
         # 词嵌入
         x = self.embedding(text) * math.sqrt(self.dim_model)
