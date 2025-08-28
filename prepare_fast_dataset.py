@@ -53,6 +53,8 @@ def convert(
     """
     # 初始化音频特征字典
     dataset = {}
+    text_length = []
+    audio_length = []
 
     # 遍历每一个音频
     for task_id, (audio_path, audio_metadata) in enumerate(tqdm(metadata)):
@@ -108,12 +110,18 @@ def convert(
         energy_normalized = energy_normalized.astype(np.float32)
 
         # 保存内容到内存
+        text_length.append(len(text_sequences))
+        audio_length.append(len(mel_spectrogram))
         dataset[f"{task_id}:text"] = text_sequences
         dataset[f"{task_id}:positive_prompt"] = positive_prompt
         dataset[f"{task_id}:negative_prompt"] = negative_prompt
         dataset[f"{task_id}:mel"] = mel_spectrogram
         dataset[f"{task_id}:pitch"] = f0_normalized
         dataset[f"{task_id}:energy"] = energy_normalized
+
+    # 保存长度到内存
+    dataset["text_length"] = np.array(text_length)
+    dataset["audio_length"] = np.array(audio_length)
 
     # 返回音频特征字典
     return dataset

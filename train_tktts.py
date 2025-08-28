@@ -92,9 +92,11 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         self.batches: list[list[int]]
 
         # 预计算所有样本的索引和长度
+        text_length = dataset.data_samples["text_length"].tolist()
+        audio_length = dataset.data_samples["audio_length"].tolist()
         self.index_and_lengths = [
             # 简单起见，我们用文本序列的长度加上梅尔频谱的帧数作为这个样本的长度，避免一大堆计算
-            (idx, len(dataset.data_samples[f"{idx}:text"]) + len(dataset.data_samples[f"{idx}:mel"]))
+            (idx, text_length[idx] + audio_length[idx])
             for idx in range(len(dataset))
         ]
         self.index_to_length = dict(self.index_and_lengths)
