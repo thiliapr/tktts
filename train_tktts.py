@@ -21,7 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.model import FastSpeech2
-from utils.tookit import convert_to_tensor, create_padding_mask, get_sequence_lengths
+from utils.tookit import convert_to_tensor, create_padding_mask, extract_value, get_sequence_lengths
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
@@ -529,31 +529,32 @@ def main(args: argparse.Namespace):
             val_results = validate(model, val_loader, args.duration_weight, device)
 
             # 绘制损失分布直方图
-            for loss_type, loss in [
-                ("Post-Net Audio", [loss for _, _, _, (loss, _, _, _, _) in val_results]),
-                ("Original Audio", [loss for _, _, _, (_, loss, _, _, _) in val_results]),
-                ("Duration", [loss for _, _, _, (_, _, loss, _, _) in val_results]),
-                ("Pitch", [loss for _, _, _, (_, _, _, loss, _) in val_results]),
-                ("Energy", [loss for _, _, _, (_, _, _, _, loss) in val_results]),
-            ]:
-                writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_type} Loss Distribution", np.array(loss))
+            for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
+                loss_values = [result[3][loss_idx] for result in val_results]
+                writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
 
             # 创建各种验证指标的散点图
-            for title, x_label, y_label, x, y in [
+            for title, x_label, y_label, x_indices, y_indices in [
                 # 预测长度与目标长度
-                ("Predicted vs True Length", "Predicted Length", "True Length", *zip(*[(pred_length, target_length) for _, pred_length, target_length, _ in val_results])),
+                ("Predicted vs True Length", "Predicted Length", "True Length", [1], [2]),
                 # 文本长度与各类损失
-                ("Text Length vs Post-Net Audio Loss", "Text Length", "Post-Net Audio Loss", *zip(*[(text_length, loss) for text_length, _, _, (loss, _, _, _, _) in val_results])),
-                ("Text Length vs Original Audio Loss", "Text Length", "Original Audio Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, loss, _, _, _) in val_results])),
-                ("Text Length vs Duration Loss", "Text Length", "Duration Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, _, loss, _, _) in val_results])),
-                ("Text Length vs Pitch Loss", "Text Length", "Pitch Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, _, _, loss, _) in val_results])),
-                ("Text Length vs Energy Loss", "Text Length", "Energy Loss", *zip(*[(text_length, loss) for text_length, _, _, (_, _, _, _, loss) in val_results])),
+                ("Text Length vs Post-Net Audio Loss", "Text Length", "Post-Net Audio Loss", [0], [3, 0]),
+                ("Text Length vs Original Audio Loss", "Text Length", "Original Audio Loss", [0], [3, 1]),
+                ("Text Length vs Duration Loss", "Text Length", "Duration Loss", [0], [3, 2]),
+                ("Text Length vs Pitch Loss", "Text Length", "Pitch Loss", [0], [3, 3]),
+                ("Text Length vs Energy Loss", "Text Length", "Energy Loss", [0], [3, 4]),
             ]:
+                # 获取每个点的坐标
+                x_values, y_values = [], []
+                for result in val_results:
+                    x_values.append(extract_value(result, x_indices))
+                    y_values.append(extract_value(result, y_indices))
+
                 # 创建图形和坐标轴
                 figure, axis = plt.subplots(figsize=(10, 6))
 
                 # 绘制散点图
-                axis.scatter(x, y)
+                axis.scatter(x_values, y_values)
 
                 # 设置坐标轴标签和标题
                 axis.set_xlabel(x_label)

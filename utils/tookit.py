@@ -6,7 +6,7 @@
 import gc
 import pathlib
 from typing import Optional, TypeVar, Union
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 import torch
 import numpy as np
 
@@ -194,3 +194,32 @@ def create_padding_mask(sequences: list[torch.Tensor]) -> torch.BoolTensor:
 
     # 通过广播机制比较位置索引与序列长度，生成填充掩码（True表示填充位置）
     return position_indices.unsqueeze(0) >= sequence_lengths.unsqueeze(1)
+
+
+def extract_value(data: Sequence, indices: list[int]):
+    """
+    从嵌套的数据结构（列表或元组）中，根据给定的索引序列逐层提取对应的值。
+
+    工作流程：
+    1. 以初始数据作为起点
+    2. 遍历索引序列中的每个索引值
+    3. 依次使用每个索引值对当前数据进行索引操作，获取下一层级的数据
+    4. 完成所有索引遍历后，返回最终得到的值
+
+    Args:
+        data: 嵌套的列表或元组，从中提取数据
+        indices: 整数索引组成的列表，指示提取路径
+
+    Returns:
+        经过索引序列提取后得到的最终值
+
+    Examples:
+        >>> nested_data = ([1, 2, 3], 4, 5)
+        >>> extract_value(nested_data, [0, 1])
+        2
+        >>> extract_value(nested_data, [1])
+        4
+    """
+    for idx in indices:
+        data = data[idx]
+    return data
