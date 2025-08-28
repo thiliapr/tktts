@@ -60,8 +60,9 @@ class TkTTSDataset(Dataset):
 
     def __len__(self) -> int:
         # 每个音频有 6 个特征: 文本序列、正面提示、负面提示、梅尔频谱、音高序列、能量序列
-        # 所以用音频特征总数除以 6 就是音频样本数
-        return len(self.data_samples) // 6
+        # 然后这个文件还储存了每个文本序列和音频序列的长度，也就是 2 个特征
+        # 所以用音频特征总数减去 2 再除以 6 就是音频样本数
+        return (len(self.data_samples) - 2) // 6
 
 
 class TkTTSDatasetSampler(Sampler[list[int]]):
@@ -103,10 +104,10 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
 
     def set_epoch(self, epoch: int) -> None:
         """
-        设置当前epoch并重新生成批次
+        设置当前 epoch 并重新生成批次
 
-        每个epoch开始时调用，用于:
-        1. 根据新epoch重新打乱数据顺序
+        每个 epoch 开始时调用，用于:
+        1. 根据新 epoch 重新打乱数据顺序
         2. 重新分配批次
         """
         generator = random.Random(self.seed + epoch)
