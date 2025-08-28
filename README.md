@@ -164,9 +164,7 @@ python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /pat
 ```bash
 python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.npz -v /path/to/dataset/val.npz
 ```
-将`<num_epochs>`替换为实际的你想训练的轮数  
-> [!TIP]
-> 你可以在训练后运行`python show_scales.py /path/to/ckpt`来看看每层的缩放因子，按数据流向排序
+将`<num_epochs>`替换为实际的你想训练的轮数
 
 ### 生成
 ```bash
