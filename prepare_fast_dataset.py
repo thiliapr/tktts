@@ -88,17 +88,18 @@ def convert(
         )
 
         # 使用 stonemask 修正
-        refined_f0 = pw.stonemask(audio, f0, time_axis, sample_rate)
+        f0_refined = pw.stonemask(audio, f0, time_axis, sample_rate)
+        f0_log = np.log(f0_log + 1e-8)
 
         # 频谱包络
-        sp = pw.cheaptrick(audio, refined_f0, time_axis, sample_rate)
+        sp = pw.cheaptrick(audio, f0_refined, time_axis, sample_rate)
 
         # 对每一帧的频谱包络求和
         energy = np.sum(sp, axis=1)
         energy_log = np.log(energy + 1e-8)
 
         # 对音高、能量归一化
-        f0_normalized = (refined_f0 - refined_f0.min()) / (refined_f0.max() - refined_f0.min() + 1e-8)
+        f0_normalized = (f0_log - f0_log.min()) / (f0_log.max() - f0_log.min() + 1e-8)
         energy_normalized = (energy_log - energy_log.min()) / (energy_log.max() - energy_log.min() + 1e-8)
 
         # 转换数据类型以节省储存空间
