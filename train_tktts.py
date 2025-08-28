@@ -534,15 +534,15 @@ def main(args: argparse.Namespace):
                 writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
 
             # 创建各种验证指标的散点图
-            for title, x_label, y_label, x_indices, y_indices in [
+            for x_label, y_label, x_indices, y_indices in [
                 # 预测长度与目标长度
-                ("Predicted vs True Length", "Predicted Length", "True Length", [1], [2]),
+                ("Predicted Length", "True Length", [1], [2]),
                 # 文本长度与各类损失
-                ("Text Length vs Post-Net Audio Loss", "Text Length", "Post-Net Audio Loss", [0], [3, 0]),
-                ("Text Length vs Original Audio Loss", "Text Length", "Original Audio Loss", [0], [3, 1]),
-                ("Text Length vs Duration Loss", "Text Length", "Duration Loss", [0], [3, 2]),
-                ("Text Length vs Pitch Loss", "Text Length", "Pitch Loss", [0], [3, 3]),
-                ("Text Length vs Energy Loss", "Text Length", "Energy Loss", [0], [3, 4]),
+                ("Text Length", "Post-Net Audio Loss", [0], [3, 0]),
+                ("Text Length", "Original Audio Loss", [0], [3, 1]),
+                ("Text Length", "Duration Loss", [0], [3, 2]),
+                ("Text Length", "Pitch Loss", [0], [3, 3]),
+                ("Text Length", "Energy Loss", [0], [3, 4]),
             ]:
                 # 获取每个点的坐标
                 x_values, y_values = [], []
@@ -557,6 +557,7 @@ def main(args: argparse.Namespace):
                 axis.scatter(x_values, y_values)
 
                 # 设置坐标轴标签和标题
+                title = f"{x_label} vs {y_label}"
                 axis.set_xlabel(x_label)
                 axis.set_ylabel(y_label)
                 axis.set_title(title)
@@ -571,12 +572,9 @@ def main(args: argparse.Namespace):
                 writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
         # 记录训练损失
-        for n_iter, (postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss) in enumerate(train_loss):
-            writer.add_scalar("Train/Post-Net Audio Loss", postnet_loss, current_epoch * len(train_loss) + n_iter)
-            writer.add_scalar("Train/Original Audio Loss", audio_loss, current_epoch * len(train_loss) + n_iter)
-            writer.add_scalar("Train/Duration Loss", duration_loss, current_epoch * len(train_loss) + n_iter)
-            writer.add_scalar("Train/Pitch Loss", pitch_loss, current_epoch * len(train_loss) + n_iter)
-            writer.add_scalar("Train/Energy Loss", energy_loss, current_epoch * len(train_loss) + n_iter)
+        for n_iter, loss in enumerate(train_loss):
+            for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
+                writer.add_scalar(f"Train/{loss_name} Loss", loss[loss_idx], current_epoch * len(train_loss) + n_iter)
 
     # 记录模型的文本和标签嵌入，覆盖上一个记录
     writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
