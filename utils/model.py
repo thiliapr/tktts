@@ -565,9 +565,9 @@ class FastSpeech2(nn.Module):
         self.tag_embedding = nn.Embedding(config.num_tags, self.dim_model, device=device)
 
         # 编码器、解码器
-        layer = FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, dropout, device)
-        self.encoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_encoder_layers ))
-        self.decoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_decoder_layers ))
+        module = FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, dropout, device)
+        self.encoder = nn.ModuleList(copy.deepcopy(module) for _ in range(config.num_encoder_layers ))
+        self.decoder = nn.ModuleList(copy.deepcopy(module) for _ in range(config.num_decoder_layers ))
 
         # 预测器
         self.duration_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
@@ -586,6 +586,14 @@ class FastSpeech2(nn.Module):
 
         # 后处理网络
         self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers)
+
+        # 后处理网络缩放因子
+        self.postnet_scale = nn.Parameter(torch.zeros(1))
+
+        # 初始化权重
+        nn.init.zeros_(self.mel_predictor.bias)
+        for module in [self.embedding, self.tag_embedding, self.pitch_embedding, self.energy_embedding, self.mel_predictor]:
+            nn.init.xavier_uniform_(module.weight)
 
     def prompt_embedding(self, prompt: torch.LongTensor, padding_mask: Optional[torch.BoolTensor]):
         """
@@ -701,5 +709,5 @@ class FastSpeech2(nn.Module):
         mel_prediction = self.mel_predictor(x)  # [batch_size, audio_len, num_mels]
 
         # 通过后处理网络
-        postnet_prediction = mel_prediction + self.postnet(mel_prediction, audio_padding_mask)
+        postnet_prediction = mel_prediction + self.postnet(mel_prediction, audio_padding_mask) * self.postnet_scale
         return postnet_prediction, mel_prediction, duration_prediction, pitch_prediction, energy_prediction, audio_padding_mask
