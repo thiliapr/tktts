@@ -20,7 +20,7 @@ from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.model import FastSpeech2
 from utils.tookit import convert_to_tensor, create_padding_mask, extract_value, get_sequence_lengths, identity
 
@@ -227,7 +227,6 @@ def fastspeech2_loss(
     pitch_target: torch.Tensor,
     energy_target: torch.Tensor,
     audio_padding_mask: torch.BoolTensor,
-    duration_weight: float
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     计算 FastSpeech2 模型的复合损失函数，包含音频重建、时长、音高和能量损失。
@@ -246,7 +245,6 @@ def fastspeech2_loss(
         pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
         energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
         audio_padding_mask: 音频预测填充掩码，形状为 [batch_size]
-        duration_weight: 持续时间损失的权重系数
 
     Returns:
         每个序列的各分量（后处理网络、原始梅尔频谱、时长总和、音高、能量）损失值，标量张量
@@ -284,7 +282,7 @@ def fastspeech2_loss(
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
     # 所以 duration_pred.sum(dim=1) 已经是去除了填充部分的总和
-    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target, reduction="none") * duration_weight
+    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target, reduction="none")
 
     # 计算各分量损失
     postnet_loss = masked_l1_loss(postnet_pred, audio_target, audio_padding_mask)
@@ -301,7 +299,6 @@ def train(
     dataloader: DataLoader,
     optimizer: optim.AdamW,
     scaler: GradScaler,
-    duration_weight: float,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
 ) -> list[tuple[float, float, float, float, float]]:
@@ -322,7 +319,6 @@ def train(
         optimizer: 模型优化器
         scaler: 混合精度梯度缩放器
         accumulation_steps: 梯度累积步数
-        duration_weight: 持续时间损失的权重系数
         device: 训练设备（默认使用 CPU）
 
     Returns:
@@ -363,7 +359,7 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask)  # 计算损失
             postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
             loss = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
@@ -397,7 +393,6 @@ def train(
 def validate(
     model: FastSpeech2,
     dataloader: DataLoader,
-    duration_weight: float,
     device: torch.device = torch.device("cpu")
 ) -> list[tuple[int, torch.Tensor, torch.Tensor, tuple[float, float, float, float, float]]]:
     """
@@ -410,7 +405,6 @@ def validate(
     Args:
         model: 要验证的 FastSpeech2 模型实例
         dataloader: 验证集的数据加载器，提供批次数据
-        duration_weight: 持续时间损失的权重系数，用于调整不同损失项的重要性
         device: 计算设备，用于指定模型和数据所在的硬件设备
 
     Returns:
@@ -438,7 +432,7 @@ def validate(
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
 
             # 计算损失
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask)
 
         # 记录当前批次的损失信息
         for seq_idx in range(text_sequences.size(0)):
@@ -473,7 +467,6 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
     parser.add_argument("-do", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
-    parser.add_argument("-dw", "--duration-weight", default=DEFAULT_DUARTION_WEIGHT, type=float, help="持续时间损失的权重系数，默认为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -529,7 +522,7 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train_loss = train(model, train_loader, optimizer, scaler, args.duration_weight, accumulation_steps=args.accumulation_steps, device=device)
+        train_loss = train(model, train_loader, optimizer, scaler, accumulation_steps=args.accumulation_steps, device=device)
 
         # 记录训练损失
         for n_iter, loss in enumerate(train_loss):
@@ -542,7 +535,7 @@ def main(args: argparse.Namespace):
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
-        val_results = validate(model, val_loader, args.duration_weight, device)
+        val_results = validate(model, val_loader, device)
 
         # 绘制验证损失分布直方图
         for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
