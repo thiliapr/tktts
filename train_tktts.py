@@ -351,7 +351,7 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target[:, :postnet_pred.size(1)], audio_length, pitch_target[:, :postnet_pred.size(1)], energy_target[:, :postnet_pred.size(1)], audio_padding_mask, duration_weight)  # 计算损失
             postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
             loss = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
