@@ -659,8 +659,8 @@ class FastSpeech2(nn.Module):
 
         # 调节时长，使其总和与目标值相同
         if duration_sum_target is not None:
-            duration, duration_sum_target = duration.float(), duration_sum_target.float()  # 转化为 float，避免精度丢失导致后面计算 duration_pred_sum != duration_sum_target
-            duration *= (duration_sum_target.unsqueeze(1) / duration.sum(dim=1, keepdim=True))  # 计算缩放，使 duration_pred_sum 等于 duration_sum_target
+            duration, duration_sum_target = duration.float(), duration_sum_target.float()  # 转化为 float，避免精度丢失导致后面计算 duration_sum_pred != duration_sum_target
+            duration *= (duration_sum_target.unsqueeze(1) / duration.sum(dim=1, keepdim=True))  # 计算缩放，使 duration_sum_pred 等于 duration_sum_target
             duration = duration.to(dtype=x.dtype)  # 转换回原来精度
 
         # 长度调节
