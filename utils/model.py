@@ -351,8 +351,6 @@ class VariancePredictor(nn.Module):
         x = self.output_layer(x).squeeze(-1)
 
         # 再次对填充位置置零，防止填充位置输出非零结果影响音高、能量或时长预测
-        # 其实如果是训练阶段，由于损失函数已经忽略了填充位置，所以这里可以不置零
-        # 但是如果有人在推理阶段批量处理数据，可能存在填充并影响输出，所以这里还是置零
         x = x.masked_fill(padding_mask, 0)
         return x
 
