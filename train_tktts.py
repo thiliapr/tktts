@@ -270,16 +270,16 @@ def fastspeech2_loss(
         return maksed_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
     # 填充目标序列，方便计算损失
-    batch_size, pred_audio_length, num_mels = audio_pred.size()
-    if padding_len := max(pred_audio_length - audio_target.size(1), 0):
+    batch_size, pred_length, num_mels = audio_pred.size()
+    if padding_len := max(pred_length - audio_target.size(1), 0):
         audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=postnet_pred.device)], dim=1)
         pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=postnet_pred.device)], dim=1)
         energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=postnet_pred.device)], dim=1)
     
     # 截断目标序列到预测序列的长度
-    audio_target = audio_target[:, :pred_audio_length]
-    pitch_target = pitch_target[:, :pred_audio_length]
-    energy_target = energy_target[:, :pred_audio_length]
+    audio_target = audio_target[:, :pred_length]
+    pitch_target = pitch_target[:, :pred_length]
+    energy_target = energy_target[:, :pred_length]
 
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
