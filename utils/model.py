@@ -671,6 +671,8 @@ class FastSpeech2(nn.Module):
             if x.size(1) < pitch_target.size(1):
                 print(x.size(1), pitch_target.size(1))
                 x = torch.cat([x, torch.zeros(x.size(0), pitch_target.size(1) - x.size(1), x.size(2), device=x.device)], dim=1)
+            else:
+                print(x.size(1), pitch_target.size(1))
             x = x[:, :pitch_target.size(1)]
 
         # 生成音频填充掩码
