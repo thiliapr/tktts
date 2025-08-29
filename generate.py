@@ -73,8 +73,8 @@ def main(args: argparse.Namespace):
         print(f"负面提示词: {[tag_label_encoder.id_to_tag[tag] for tag in negative_prompt]}")
 
     # 将提示词序列转换为张量
-    positive_prompt = torch.tensor([positive_prompt]) if positive_prompt else None  # 增加批次维度
-    negative_prompt = torch.tensor([negative_prompt]) if negative_prompt else None
+    positive_prompt = torch.tensor([positive_prompt], device=device) if positive_prompt else None  # 增加批次维度
+    negative_prompt = torch.tensor([negative_prompt], device=device) if negative_prompt else None
 
     # 生成音频
     mel_prediction, _, _, _, _, _ = model(
