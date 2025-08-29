@@ -669,7 +669,7 @@ class FastSpeech2(nn.Module):
         # 实践证明，duration.sum(dim=1).ceil() != duration_sum_target 是经常的事，所以要填充或截断
         if pitch_target is not None:
             # 如果预测长度小于目标长度，则用零填充，否则截断到目标长度
-            if padding_len := min(pitch_target.size(1) - x.size(1), 0):
+            if padding_len := max(pitch_target.size(1) - x.size(1), 0):
                 x = torch.cat([x, torch.zeros(x.size(0), padding_len, x.size(2), device=x.device)], dim=1)
             x = x[:, :pitch_target.size(1)]
 
