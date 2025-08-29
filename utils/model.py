@@ -663,9 +663,6 @@ class FastSpeech2(nn.Module):
         # 预测时长
         duration_prediction = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
 
-        # 对时长应用填充掩码
-        duration_prediction = duration_prediction.masked_fill(text_padding_mask, 0)
-
         # 防止时长小于零
         duration = duration_prediction.clamp(min=0)
 
