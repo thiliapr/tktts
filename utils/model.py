@@ -256,10 +256,10 @@ class FFTBlock(nn.Module):
         self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, device=device)
 
         # 归一化和缩放
-        self.attention_norm = ScaleNorm(dim_model)
-        self.feedforward_norm = ScaleNorm(dim_model)
-        self.attention_scale = nn.Parameter(torch.zeros(1))
-        self.feedforward_scale = nn.Parameter(torch.zeros(1))
+        self.attention_norm = ScaleNorm(dim_model, device=device)
+        self.feedforward_norm = ScaleNorm(dim_model, device=device)
+        self.attention_scale = nn.Parameter(torch.zeros(1)).to(device)
+        self.feedforward_scale = nn.Parameter(torch.zeros(1)).to(device)
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -326,8 +326,8 @@ class VariancePredictor(nn.Module):
         self.conv1 = Conv(dim_model, dim_model, kernel_size, device=device)
         self.conv2 = Conv(dim_model, dim_model, kernel_size, device=device)
         self.output_layer = nn.Linear(dim_model, 1, device=device)
-        self.norm1 = ScaleNorm(dim_model)
-        self.norm2 = ScaleNorm(dim_model)
+        self.norm1 = ScaleNorm(dim_model, device=device)
+        self.norm2 = ScaleNorm(dim_model, device=device)
         self.activation = nn.GELU()
         self.dropout = nn.Dropout(dropout)
 
@@ -585,10 +585,10 @@ class FastSpeech2(nn.Module):
         self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
 
         # 后处理网络
-        self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers)
+        self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers, dropout, device)
 
         # 后处理网络缩放因子
-        self.postnet_scale = nn.Parameter(torch.zeros(1))
+        self.postnet_scale = nn.Parameter(torch.zeros(1)).to(device)
 
         # 初始化权重
         nn.init.zeros_(self.mel_predictor.bias)
