@@ -34,6 +34,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("text", type=str, help="文本")
     parser.add_argument("-p", "--positive-prompt", type=str, action="append", help="正面提示词，可以是多个词")
     parser.add_argument("-n", "--negative-prompt", type=str, action="append", help="负面提示词，可以是多个词")
+    parser.add_argument("-d", "--duration", type=float, help="指定音频的持续时长，默认由模型预测，单位为秒")
     return parser.parse_args(args)
 
 
@@ -46,12 +47,9 @@ def main(args: argparse.Namespace):
     model = FastSpeech2(model_config)
     model.load_state_dict(model_state)
 
-    # 获取设备并将模型转移到设备上
+    # 获取设备并将模型转移到设备上、设置模型为评估模式
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
-
-    # 设置模型为评估模式
-    model.eval()
+    model = model.to(device).eval()
 
     # 给输入文本分词
     text = tokenizer.encode(args.text)
@@ -76,11 +74,15 @@ def main(args: argparse.Namespace):
     positive_prompt = torch.tensor([positive_prompt], device=device) if positive_prompt else None  # 增加批次维度
     negative_prompt = torch.tensor([negative_prompt], device=device) if negative_prompt else None
 
+    # 将时长目标转换为张量
+    duration_sum_target = torch.tensor([1 + (args.duration * extra_config["sample_rate"]) // extra_config["hop_length"]], device=device) if args.duration else None
+
     # 生成音频
     mel_prediction, _, _, _, _, _ = model(
         text,
         positive_prompt,
         negative_prompt,
+        duration_sum_target=duration_sum_target
     )  # [1, audio_len, num_mels]
 
     # 去除批次维度，并转换为 NumPy 数组
