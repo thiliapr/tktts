@@ -286,6 +286,8 @@ class FFTBlock(nn.Module):
         x = self.activation(self.conv1(x))
 
         # 由于经过一次卷积，填充位置已经被正常位置污染（变得非零了），所以需要重新置零
+        # 具体来说，由于卷积操作会考虑邻近位置的值，如果邻近位置是非零的，那么填充位置经过卷积后也会变成非零
+        # 虽然填充位置已经是零，但填充位置旁的有效位置非零，通过卷积核的加权和，填充位置就会变成非零
         x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
 
         # 第二次卷积后不填充位置置零是因为除了卷积层需要手动置零，其他层都不用管
@@ -339,23 +341,11 @@ class VariancePredictor(nn.Module):
         nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
-        # 应用卷积模型
-        res = x  # 保存残差连接
-
-        # 将填充位置置零，防止填充位置通过卷积污染正常位置
-        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
-
         # 第一层卷积和归一化
-        x = res + self.dropout(self.activation(self.conv1(self.norm1(x))))
-        res = x  # 保存残差连接
-
-        # 由于经过一次卷积，填充位置已经被正常位置污染（变得非零了），所以需要重新置零
-        # 具体来说，由于卷积操作会考虑邻近位置的值，如果邻近位置是非零的，那么填充位置经过卷积后也会变成非零
-        # 虽然填充位置已经是零，但填充位置旁的有效位置非零，通过卷积核的加权和，填充位置就会变成非零
-        x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
+        x = x + self.dropout(self.activation(self.conv1(self.norm1(x).masked_fill(padding_mask.unsqueeze(-1), 0))))
 
         # 第二层卷积和归一化
-        x = res + self.dropout(self.activation(self.conv2(self.norm2(x))))
+        x = x + self.dropout(self.activation(self.conv2(self.norm2(x).masked_fill(padding_mask.unsqueeze(-1), 0))))
 
         # 最终输出层，形状为 [batch_size, seq_len, 1] => [batch_size, seq_len]
         x = self.output_layer(x).squeeze(-1)
