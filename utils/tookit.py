@@ -223,3 +223,26 @@ def extract_value(data: Sequence, indices: list[int]):
     for idx in indices:
         data = data[idx]
     return data
+
+
+def identity(x: T) -> T:
+    """
+    恒等函数，直接返回输入值而不做任何修改
+    该函数接收任意类型的输入参数并原样返回，常用于需要传递函数但不需要实际变换的场景
+    或者作为默认的函数参数占位符使用
+
+    Args:
+        x: 任意类型的输入值
+
+    Returns:
+        与输入值完全相同的输出值
+
+    Examples:
+        >>> identity(42)
+        42
+        >>> identity("hello")
+        'hello'
+        >>> identity([1, 2, 3])
+        [1, 2, 3]
+    """
+    return x

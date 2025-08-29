@@ -9,7 +9,7 @@ import pathlib
 import argparse
 from typing import Optional
 from collections.abc import Iterator
-from matplotlib import pyplot as plt
+import librosa
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -18,10 +18,11 @@ from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from matplotlib import pyplot as plt
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_DUARTION_WEIGHT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
 from utils.model import FastSpeech2
-from utils.tookit import convert_to_tensor, create_padding_mask, extract_value, get_sequence_lengths
+from utils.tookit import convert_to_tensor, create_padding_mask, extract_value, get_sequence_lengths, identity
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
@@ -248,7 +249,7 @@ def fastspeech2_loss(
         duration_weight: 持续时间损失的权重系数
 
     Returns:
-        各分量（后处理网络、原始梅尔频谱、时长总和、音高、能量）损失值，标量张量
+        每个序列的各分量（后处理网络、原始梅尔频谱、时长总和、音高、能量）损失值，标量张量
     """
     def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor):
         "计算掩码区域的L1损失，仅对有效帧求平均"
@@ -266,12 +267,12 @@ def fastspeech2_loss(
         maksed_loss = loss_reshaped.masked_fill(expanded_mask, 0)
 
         # 计算损失平均值
-        return maksed_loss.sum() / (~expanded_mask).sum()
+        return maksed_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
     # 所以 duration_pred.sum(dim=1) 已经是去除了填充部分的总和
-    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target) * duration_weight
+    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target, reduction="none") * duration_weight
 
     # 计算各分量损失
     postnet_loss = masked_l1_loss(postnet_pred, audio_target, audio_padding_mask)
@@ -350,7 +351,8 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
+            postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
             loss = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
         # 梯度缩放与反向传播
@@ -385,7 +387,7 @@ def validate(
     dataloader: DataLoader,
     duration_weight: float,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[int, int, int, tuple[float, float, float, float, float]]]:
+) -> list[tuple[int, torch.Tensor, torch.Tensor, tuple[float, float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
     计算模型在验证集上的各项损失值，包括音频重建损失、持续时间损失、音高损失和能量损失
@@ -401,7 +403,7 @@ def validate(
 
     Returns:
         包含每个样本详细损失信息的列表，每个元素为元组：
-        (文本序列长度, 预测音频长度, 目标音频长度, (后处理音频损失, 原始音频损失, 持续时间损失, 音高损失, 能量损失))
+        (文本序列长度, 经过后处理的梅尔频谱预测, 目标梅尔频谱, (后处理音频损失, 原始音频损失, 持续时间损失, 音高损失, 能量损失))
 
     Examples:
         >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
@@ -425,21 +427,22 @@ def validate(
 
             # 填充序列，方便计算损失
             batch_size, pred_audio_length, num_mels = audio_pred.size()
-            target_audio_length = audio_target.size(1)  # 保留原来的目标帧数，记录损失用
             if padding_len := max(pred_audio_length - audio_target.size(1), 0):
                 audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=device)], dim=1)
                 pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
                 energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
-            else:
-                audio_target = audio_target[:, :pred_audio_length]
-                pitch_target = pitch_target[:, :pred_audio_length]
-                energy_target = energy_target[:, :pred_audio_length]
 
             # 计算损失
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length.to(dtype=duration_pred.dtype), pitch_target, energy_target, audio_padding_mask, duration_weight)
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target[:, :pred_audio_length], audio_length, pitch_target[:, :pred_audio_length], energy_target[:, :pred_audio_length], audio_padding_mask, duration_weight)
 
         # 记录当前批次的损失信息
-        loss_results.append((text_sequences.size(1), pred_audio_length, target_audio_length, tuple(loss.item() for loss in all_loss)))
+        for seq_idx in range(batch_size):
+            loss_results.append((
+                (~text_padding_mask[seq_idx]).sum().item(),
+                postnet_pred[seq_idx, :(~audio_padding_mask[seq_idx]).sum()],
+                audio_target[seq_idx, :audio_length[seq_idx]],
+                tuple(loss[seq_idx].item() for loss in all_loss)
+            ))
 
     return loss_results
 
@@ -475,7 +478,7 @@ def main(args: argparse.Namespace):
 
     # 读取检查点
     print("读取检查点 ...")
-    tokenizer, model_state_dict, model_config, tag_label_encoder, optimiezer_state_dict, completed_epochs = load_checkpoint_train(args.ckpt_path)
+    tokenizer, model_state_dict, extra_config, model_config, tag_label_encoder, optimiezer_state_dict, completed_epochs = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
     model = FastSpeech2(model_config, dropout=args.dropout)
@@ -528,10 +531,11 @@ def main(args: argparse.Namespace):
             for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
                 writer.add_scalar(f"Train/{loss_name} Loss", loss[loss_idx], current_epoch * len(train_loss) + n_iter)
 
-        # 如果有验证集，进行验证并记录结果
+        # 如果没有有验证集，则跳过验证
         if not args.val_dataset:
             continue
 
+        # 验证模型效果
         val_sampler.set_epoch(current_epoch)
         val_results = validate(model, val_loader, args.duration_weight, device)
 
@@ -540,22 +544,37 @@ def main(args: argparse.Namespace):
             loss_values = [result[3][loss_idx] for result in val_results]
             writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
 
+        # 随机选择一个结果，绘制预测频谱图和其目标频谱图
+        result = random.choice(val_results)
+        for title, indices in [("Predicted Mel-Spec", [1]), ("True Mel-Spec", [2])]:
+            # 创建图形和坐标轴
+            figure, axis = plt.subplots()
+
+            # 绘制频谱图
+            librosa.display.specshow(extract_value(result, indices).cpu().numpy().T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
+
+            # 设置标题
+            axis.set_title(title)
+
+            # 将图形添加到记录器
+            writer.add_figure(f"Epoch {current_epoch + 1}/Sample {title}", figure)
+
         # 创建各种验证指标的散点图
-        for x_label, y_label, x_indices, y_indices in [
+        for x_label, y_label, (x_indices, x_value_fn), (y_indices, y_value_fn) in [
             # 预测长度与目标长度
-            ("Predicted Length", "True Length", [1], [2]),
+            ("True Length", "Predicted Length", ([2], len), ([1], len)),
             # 文本长度与各类损失
-            ("Text Length", "Post-Net Audio Loss", [0], [3, 0]),
-            ("Text Length", "Original Audio Loss", [0], [3, 1]),
-            ("Text Length", "Duration Loss", [0], [3, 2]),
-            ("Text Length", "Pitch Loss", [0], [3, 3]),
-            ("Text Length", "Energy Loss", [0], [3, 4]),
+            ("Text Length", "Post-Net Audio Loss", ([0], identity), ([3, 0], identity)),
+            ("Text Length", "Original Audio Loss", ([0], identity), ([3, 1], identity)),
+            ("Text Length", "Duration Loss", ([0], identity), ([3, 2], identity)),
+            ("Text Length", "Pitch Loss", ([0], identity), ([3, 3], identity)),
+            ("Text Length", "Energy Loss", ([0], identity), ([3, 4], identity)),
         ]:
             # 获取每个点的坐标
             x_values, y_values = [], []
             for result in val_results:
-                x_values.append(extract_value(result, x_indices))
-                y_values.append(extract_value(result, y_indices))
+                x_values.append(x_value_fn(extract_value(result, x_indices)))
+                y_values.append(y_value_fn(extract_value(result, y_indices)))
 
             # 创建图形和坐标轴
             figure, axis = plt.subplots(figsize=(10, 6))

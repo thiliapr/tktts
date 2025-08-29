@@ -141,7 +141,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any
     return tokenizer, model_state, extra_config, model_config, tag_label_encoder
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], FastSpeech2Config, TagLabelEncoder, Mapping[str, Any], int]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], TkTTSExtraConfig, FastSpeech2Config, TagLabelEncoder, Mapping[str, Any], int]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 
@@ -149,10 +149,10 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
         path: 加载检查点的目录路径
 
     Returns:
-        分词器、模型的状态、用于创建模型的配置、标签编码器、优化器的状态、训练了多少个 Epoch
+        分词器、模型的状态、模型额外的配置、用于创建模型的配置、标签编码器、优化器的状态、训练了多少个 Epoch
 
     Examples:
-        >>> tokenizer, msd, model_config, tag_label_encoder, osd, completed_epochs = load_checkpoint_train(pathlib.Path("ckpt"))
+        >>> tokenizer, msd, extra_config, model_config, tag_label_encoder, osd, completed_epochs = load_checkpoint_train(pathlib.Path("ckpt"))
         >>> model = MidiNet(model_config, deivce=torch.device("cuda"))
         >>> model.load_state_dict(msd)
         >>> optimizer = optim.AdamW(model.parameters())
@@ -160,7 +160,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
         >>> # 继续训练
     """
     # 加载分词器和模型状态
-    tokenizer, model_state, _, model_config, tag_label_encoder = load_checkpoint(path)
+    tokenizer, model_state, extra_config, model_config, tag_label_encoder = load_checkpoint(path)
 
     # 检查并加载优化器权重
     optimizer_state = torch.load(path / "optimizer.pth", weights_only=True, map_location=torch.device("cpu"))
@@ -169,7 +169,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
     completed_epochs = orjson.loads((path / "progress.json").read_bytes())["completed_epochs"]
 
     # 返回训练所需信息
-    return tokenizer, model_state, model_config, tag_label_encoder, optimizer_state, completed_epochs
+    return tokenizer, model_state, extra_config, model_config, tag_label_encoder, optimizer_state, completed_epochs
 
 
 def extract_config(model_state: dict[str, Any], num_heads: int) -> FastSpeech2Config:
