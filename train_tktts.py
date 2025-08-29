@@ -275,7 +275,7 @@ def fastspeech2_loss(
         audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=postnet_pred.device)], dim=1)
         pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=postnet_pred.device)], dim=1)
         energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=postnet_pred.device)], dim=1)
-    
+
     # 截断目标序列到预测序列的长度
     audio_target = audio_target[:, :pred_length]
     pitch_target = pitch_target[:, :pred_length]
