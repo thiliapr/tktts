@@ -88,8 +88,12 @@ def main(args: argparse.Namespace):
     # 去除批次维度，并转换为 NumPy 数组
     mel_prediction = mel_prediction.squeeze(0).cpu().numpy()  # [audio_len, num_mels]
 
+    # 将梅尔频谱还原为原始尺度，并归一化
+    mel_spectrogram = 10 ** (mel_prediction / 10)
+    mel_spectrogram = (mel_spectrogram - mel_spectrogram.min()) / (mel_spectrogram.max() - mel_spectrogram.min() + 1e-8)
+
     # 打印帧数
-    print(f"STFT 帧数: {len(mel_prediction)}")
+    print(f"STFT 帧数: {len(mel_spectrogram)}")
 
     # 将生成的梅尔频谱转换为 STFT 矩阵
     stft_matrix = librosa.feature.inverse.mel_to_stft(
