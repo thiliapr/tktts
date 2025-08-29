@@ -523,58 +523,60 @@ def main(args: argparse.Namespace):
         train_sampler.set_epoch(current_epoch)
         train_loss = train(model, train_loader, optimizer, scaler, args.duration_weight, accumulation_steps=args.accumulation_steps, device=device)
 
-        # 如果有验证集，进行验证并记录结果
-        if args.val_dataset:
-            val_sampler.set_epoch(current_epoch)
-            val_results = validate(model, val_loader, args.duration_weight, device)
-
-            # 绘制损失分布直方图
-            for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
-                loss_values = [result[3][loss_idx] for result in val_results]
-                writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
-
-            # 创建各种验证指标的散点图
-            for x_label, y_label, x_indices, y_indices in [
-                # 预测长度与目标长度
-                ("Predicted Length", "True Length", [1], [2]),
-                # 文本长度与各类损失
-                ("Text Length", "Post-Net Audio Loss", [0], [3, 0]),
-                ("Text Length", "Original Audio Loss", [0], [3, 1]),
-                ("Text Length", "Duration Loss", [0], [3, 2]),
-                ("Text Length", "Pitch Loss", [0], [3, 3]),
-                ("Text Length", "Energy Loss", [0], [3, 4]),
-            ]:
-                # 获取每个点的坐标
-                x_values, y_values = [], []
-                for result in val_results:
-                    x_values.append(extract_value(result, x_indices))
-                    y_values.append(extract_value(result, y_indices))
-
-                # 创建图形和坐标轴
-                figure, axis = plt.subplots(figsize=(10, 6))
-
-                # 绘制散点图
-                axis.scatter(x_values, y_values)
-
-                # 设置坐标轴标签和标题
-                title = f"{x_label} vs {y_label}"
-                axis.set_xlabel(x_label)
-                axis.set_ylabel(y_label)
-                axis.set_title(title)
-
-                # 添加网格线
-                axis.grid(True, linestyle="--", alpha=0.3)
-  
-                # 优化布局
-                plt.tight_layout()
-
-                # 将图形添加到记录器
-                writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
-
         # 记录训练损失
         for n_iter, loss in enumerate(train_loss):
             for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
                 writer.add_scalar(f"Train/{loss_name} Loss", loss[loss_idx], current_epoch * len(train_loss) + n_iter)
+
+        # 如果有验证集，进行验证并记录结果
+        if not args.val_dataset:
+            continue
+
+        val_sampler.set_epoch(current_epoch)
+        val_results = validate(model, val_loader, args.duration_weight, device)
+
+        # 绘制验证损失分布直方图
+        for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
+            loss_values = [result[3][loss_idx] for result in val_results]
+            writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
+
+        # 创建各种验证指标的散点图
+        for x_label, y_label, x_indices, y_indices in [
+            # 预测长度与目标长度
+            ("Predicted Length", "True Length", [1], [2]),
+            # 文本长度与各类损失
+            ("Text Length", "Post-Net Audio Loss", [0], [3, 0]),
+            ("Text Length", "Original Audio Loss", [0], [3, 1]),
+            ("Text Length", "Duration Loss", [0], [3, 2]),
+            ("Text Length", "Pitch Loss", [0], [3, 3]),
+            ("Text Length", "Energy Loss", [0], [3, 4]),
+        ]:
+            # 获取每个点的坐标
+            x_values, y_values = [], []
+            for result in val_results:
+                x_values.append(extract_value(result, x_indices))
+                y_values.append(extract_value(result, y_indices))
+
+            # 创建图形和坐标轴
+            figure, axis = plt.subplots(figsize=(10, 6))
+
+            # 绘制散点图
+            axis.scatter(x_values, y_values)
+
+            # 设置坐标轴标签和标题
+            title = f"{x_label} vs {y_label}"
+            axis.set_xlabel(x_label)
+            axis.set_ylabel(y_label)
+            axis.set_title(title)
+
+            # 添加网格线
+            axis.grid(True, linestyle="--", alpha=0.3)
+
+            # 优化布局
+            plt.tight_layout()
+
+            # 将图形添加到记录器
+            writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
     # 记录模型的文本和标签嵌入，覆盖上一个记录
     writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
