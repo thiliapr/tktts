@@ -269,6 +269,18 @@ def fastspeech2_loss(
         # 计算损失平均值
         return maksed_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
+    # 填充目标序列，方便计算损失
+    batch_size, pred_audio_length, num_mels = audio_pred.size()
+    if padding_len := max(pred_audio_length - audio_target.size(1), 0):
+        audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=postnet_pred.device)], dim=1)
+        pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=postnet_pred.device)], dim=1)
+        energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=postnet_pred.device)], dim=1)
+    
+    # 截断目标序列到预测序列的长度
+    audio_target = audio_target[:, :pred_audio_length]
+    pitch_target = pitch_target[:, :pred_audio_length]
+    energy_target = energy_target[:, :pred_audio_length]
+
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
     # 所以 duration_pred.sum(dim=1) 已经是去除了填充部分的总和
@@ -351,7 +363,7 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target[:, :postnet_pred.size(1)], audio_length, pitch_target[:, :postnet_pred.size(1)], energy_target[:, :postnet_pred.size(1)], audio_padding_mask, duration_weight)  # 计算损失
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)  # 计算损失
             postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
             loss = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
@@ -425,18 +437,11 @@ def validate(
             # 模型前向传播（不使用教师强制）
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
 
-            # 填充序列，方便计算损失
-            batch_size, pred_audio_length, num_mels = audio_pred.size()
-            if padding_len := max(pred_audio_length - audio_target.size(1), 0):
-                audio_target = torch.cat([audio_target, torch.zeros(batch_size, padding_len, num_mels, device=device)], dim=1)
-                pitch_target = torch.cat([pitch_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
-                energy_target = torch.cat([energy_target, torch.zeros(batch_size, padding_len, device=device)], dim=1)
-
             # 计算损失
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target[:, :pred_audio_length], audio_length, pitch_target[:, :pred_audio_length], energy_target[:, :pred_audio_length], audio_padding_mask, duration_weight)
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask, duration_weight)
 
         # 记录当前批次的损失信息
-        for seq_idx in range(batch_size):
+        for seq_idx in range(text_sequences.size(0)):
             loss_results.append((
                 (~text_padding_mask[seq_idx]).sum().item(),
                 postnet_pred[seq_idx, :(~audio_padding_mask[seq_idx]).sum()],
