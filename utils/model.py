@@ -76,12 +76,10 @@ class MultiheadAttention(nn.Module):
         self.out_proj = nn.Linear(dim_model, dim_model, device=device)
 
         # RoPE 旋转频率
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim_head, 2, device=device) / dim_head))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.inv_freq = nn.Buffer(1.0 / (10000 ** (torch.arange(0, dim_head, 2, device=device) / dim_head)), persistent=False)
 
         # freqs_cis 缓存
-        self.freqs_cis_cache: torch.Tensor
-        self.register_buffer("freqs_cis_cache", torch.empty(0, dim_head // 2, device=device), persistent=False)
+        self.freqs_cis_cache = nn.Buffer(torch.empty(0, dim_head // 2, device=device), persistent=False)
 
         # 使用 Xavier 均匀分布初始化查询、键、值、投影权重
         for module in [self.qkv_proj, self.out_proj]:
@@ -252,7 +250,6 @@ class FFTBlock(nn.Module):
         # 自注意力和前馈网络
         self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
         self.conv1 = Conv(dim_model, dim_feedforward, conv1_kernel_size, device=device)
-        self.activation = nn.GELU()
         self.conv2 = Conv(dim_feedforward, dim_model, conv2_kernel_size, device=device)
 
         # 归一化和缩放
@@ -283,7 +280,7 @@ class FFTBlock(nn.Module):
         x = x.masked_fill(padding_mask.unsqueeze(-1), 0)
 
         # 前馈网络第一层卷积
-        x = self.activation(self.conv1(x))
+        x = F.silu(self.conv1(x))
 
         # 由于经过一次卷积，填充位置已经被正常位置污染（变得非零了），所以需要重新置零
         # 具体来说，由于卷积操作会考虑邻近位置的值，如果邻近位置是非零的，那么填充位置经过卷积后也会变成非零
@@ -300,12 +297,12 @@ class FFTBlock(nn.Module):
 class VariancePredictor(nn.Module):
     """
     VariancePredictor 是一个用于预测时长、音高或能量的卷积神经网络模块。
-    它由多个卷积层组成，每个卷积层后面跟着缩放归一化、GELU 激活函数和 Dropout 层。
+    它由多个卷积层组成，每个卷积层后面跟着缩放归一化、SiLU 激活函数和 Dropout 层。
 
     该模块的主要工作流程如下：
         1. 输入张量通过一系列卷积层进行处理。
         2. 每个卷积层后应用缩放归一化以增强模型的稳定性。
-        3. 使用 GELU 激活函数引入非线性。
+        3. 使用 SiLU 激活函数引入非线性。
         4. 应用 Dropout 层以防止过拟合。
         5. 最终通过一个卷积层输出预测结果。
 
@@ -330,7 +327,6 @@ class VariancePredictor(nn.Module):
         self.output_layer = nn.Linear(dim_model, 1, device=device)
         self.norm1 = ScaleNorm(dim_model, device=device)
         self.norm2 = ScaleNorm(dim_model, device=device)
-        self.activation = nn.GELU()
         self.dropout = nn.Dropout(dropout)
 
         # 初始化权重
@@ -342,10 +338,10 @@ class VariancePredictor(nn.Module):
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
         # 第一层卷积和归一化
-        x = x + self.dropout(self.activation(self.conv1(self.norm1(x).masked_fill(padding_mask.unsqueeze(-1), 0))))
+        x = x + self.dropout(F.silu(self.conv1(self.norm1(x).masked_fill(padding_mask.unsqueeze(-1), 0))))
 
         # 第二层卷积和归一化
-        x = x + self.dropout(self.activation(self.conv2(self.norm2(x).masked_fill(padding_mask.unsqueeze(-1), 0))))
+        x = x + self.dropout(F.silu(self.conv2(self.norm2(x).masked_fill(padding_mask.unsqueeze(-1), 0))))
 
         # 最终输出层，形状为 [batch_size, seq_len, 1] => [batch_size, seq_len]
         x = self.output_layer(x).squeeze(-1)
