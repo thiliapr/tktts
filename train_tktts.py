@@ -8,7 +8,7 @@ import random
 import pathlib
 import argparse
 from typing import Optional
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import librosa
 import torch
 import numpy as np
@@ -249,10 +249,10 @@ def fastspeech2_loss(
     Returns:
         每个序列的各分量（后处理网络、原始梅尔频谱、时长总和、音高、能量）损失值，标量张量
     """
-    def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor):
-        "计算掩码区域的L1损失，仅对有效帧求平均"
+    def masked_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor]):
+        "计算掩码区域的损失，仅对有效帧求平均"
         # 计算逐元素L1损失 [batch_size, seq_len, ...]
-        elementwise_loss = F.l1_loss(pred, target, reduction="none")
+        elementwise_loss = criterion(pred, target, reduction="none")
 
         # 重塑损失张量以便统一 duration/pitch/energy 和 mel 掩码应用逻辑
         # [batch_size, seq_len, feature_dim]，其中 feature_dim 可能为 1 或 dim_model
@@ -282,13 +282,13 @@ def fastspeech2_loss(
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
     # 所以 duration_pred.exp().sum(dim=1) 已经是去除了填充部分的总和
-    duration_loss = F.l1_loss(duration_pred.logsumexp(dim=1), duration_sum_target.log(), reduction="none")
+    duration_loss = F.mse_loss(duration_pred.logsumexp(dim=1), duration_sum_target.log(), reduction="none")
 
     # 计算各分量损失
-    postnet_loss = masked_l1_loss(postnet_pred, audio_target, audio_padding_mask)
-    audio_loss = masked_l1_loss(audio_pred, audio_target, audio_padding_mask)
-    pitch_loss = masked_l1_loss(pitch_pred, pitch_target, audio_padding_mask)
-    energy_loss = masked_l1_loss(energy_pred, energy_target, audio_padding_mask)
+    postnet_loss = masked_loss(postnet_pred, audio_target, audio_padding_mask, F.l1_loss)
+    audio_loss = masked_loss(audio_pred, audio_target, audio_padding_mask, F.l1_loss)
+    pitch_loss = masked_loss(pitch_pred, pitch_target, audio_padding_mask, F.mse_loss)
+    energy_loss = masked_loss(energy_pred, energy_target, audio_padding_mask, F.mse_loss)
 
     # 返回各分量损失
     return postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss
