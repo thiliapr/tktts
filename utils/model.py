@@ -22,7 +22,6 @@ class ScaleNorm(nn.Module):
 
     Args:
         dim: 用于初始化缩放因子 `g` 的维度。
-        eps: 防止除零的常数（默认为1e-5）。
 
     Returns:
         返回缩放归一化后的张量。
@@ -34,13 +33,12 @@ class ScaleNorm(nn.Module):
         output = scale_norm(x)  # 返回经过缩放归一化后的张量
     """
 
-    def __init__(self, dim: int, eps: float = 1e-5, device: Optional[torch.device] = None):
+    def __init__(self, dim: int, device: Optional[torch.device] = None):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(1, device=device) * (dim ** 0.5))  # 可学习的缩放因子，初始化为dim的平方根
-        self.eps = eps  # 避免除零错误的小常数
 
     def forward(self, x):
-        norm = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp(min=self.eps)  # 计算L2范数并防止为零
+        norm = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp(min=torch.finfo(x).eps)  # 计算L2范数并防止为零
         return self.scale * x / norm  # 对输入张量进行缩放归一化
 
 
@@ -682,8 +680,8 @@ class FastSpeech2(nn.Module):
         energy = energy_prediction if energy_target is None else energy_target
 
         # 归一化音高，并离散化
-        pitch = ((pitch - pitch.min()) / (pitch.max() - pitch.min() + 1e-7) * (self.variance_bins - 1)).to(dtype=int)
-        energy = ((energy - energy.min()) / (energy.max() - energy.min() + 1e-7) * (self.variance_bins - 1)).to(dtype=int)
+        pitch = ((pitch - pitch.min()) / (pitch.max() - pitch.min() + torch.finfo(pitch).eps) * (self.variance_bins - 1)).to(dtype=int)
+        energy = ((energy - energy.min()) / (energy.max() - energy.min() + torch.finfo(energy).eps) * (self.variance_bins - 1)).to(dtype=int)
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
