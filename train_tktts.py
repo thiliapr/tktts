@@ -244,7 +244,7 @@ def fastspeech2_loss(
         duration_sum_target: 真实的总时长，形状为 [batch_size]
         pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
         energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
-        audio_padding_mask: 音频预测填充掩码，形状为 [batch_size]
+        audio_padding_mask: 音频预测填充掩码，形状为 [batch_size, seq_len]
 
     Returns:
         每个序列的各分量（后处理网络、原始梅尔频谱、时长总和、音高、能量）损失值，标量张量
@@ -262,10 +262,10 @@ def fastspeech2_loss(
         expanded_mask = padding_mask.unsqueeze(2).expand_as(loss_reshaped)
 
         # 将填充区域的损失置零
-        maksed_loss = loss_reshaped.masked_fill(expanded_mask, 0)
+        masked_loss = loss_reshaped.masked_fill(expanded_mask, 0)
 
         # 计算损失平均值
-        return maksed_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
+        return masked_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
     # 填充目标序列，方便计算损失
     batch_size, pred_length, num_mels = audio_pred.size()
