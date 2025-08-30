@@ -527,7 +527,7 @@ class FastSpeech2(nn.Module):
         energy_target: 能量目标张量，形状为 (batch_size, audio_len)。
 
     Outputs:
-        返回一个元组，包含后处理网络输出的梅尔频谱预测、原始梅尔频谱预测、时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
+        返回一个元组，包含后处理网络输出的梅尔频谱预测、原始梅尔频谱预测、对数尺度的时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
         - postnet_prediction: (batch_size, audio_len, num_mels)
         - mel_prediction: (batch_size, audio_len, num_mels)
         - mel_prediction: (batch_size, audio_len, num_mels)
@@ -642,11 +642,14 @@ class FastSpeech2(nn.Module):
         for layer in self.encoder:
             x = layer(x, text_padding_mask)
 
-        # 预测时长
+        # 预测时长（对数尺度）
         duration_prediction = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
 
+        # 将时长预测转换为原始尺度
+        duration = duration_prediction.exp()
+
         # 防止时长小于零
-        duration = duration_prediction.clamp(min=0)
+        duration = duration.clamp(min=0)
 
         # 对每个样本，如果总持续时间为 0，则将每个元素设为 1，避免后续除零错误
         duration += (duration.sum(dim=1, keepdim=True) == 0).to(dtype=duration.dtype)

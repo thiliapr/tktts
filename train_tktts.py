@@ -281,8 +281,8 @@ def fastspeech2_loss(
 
     # 计算总时长损失
     # 这里不用 padding_mask 是因为，前向传播时已经把填充部分置零了，
-    # 所以 duration_pred.sum(dim=1) 已经是去除了填充部分的总和
-    duration_loss = F.l1_loss(duration_pred.sum(dim=1), duration_sum_target, reduction="none")
+    # 所以 duration_pred.exp().sum(dim=1) 已经是去除了填充部分的总和
+    duration_loss = F.l1_loss(duration_pred.logsumexp(dim=1), duration_sum_target.log(), reduction="none")
 
     # 计算各分量损失
     postnet_loss = masked_l1_loss(postnet_pred, audio_target, audio_padding_mask)
