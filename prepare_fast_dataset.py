@@ -71,17 +71,6 @@ def convert(
         # 去除音频首尾的静音部分
         audio, _ = librosa.effects.trim(audio)
 
-        # 计算梅尔频谱特征
-        mel_spectrogram = librosa.feature.melspectrogram(
-            y=audio,
-            sr=sample_rate,
-            n_fft=fft_length,
-            hop_length=hop_length,
-            win_length=win_length,
-            n_mels=num_mels
-        ).T  # 转置以使时间步为第一维度
-        mel_log = librosa.power_to_db(mel_spectrogram, ref=np.max)
-
         # 提取基频
         f0, time_axis = pw.dio(
             audio, sample_rate,
@@ -98,6 +87,22 @@ def convert(
         # 对每一帧的频谱包络求和
         energy = np.sum(sp, axis=1)
         energy_log = np.log(energy + 1e-8)
+
+        # 计算梅尔频谱特征
+        mel_spectrogram = librosa.feature.melspectrogram(
+            y=audio,
+            sr=sample_rate,
+            n_fft=fft_length,
+            hop_length=hop_length,
+            win_length=win_length,
+            n_mels=num_mels
+        ).T  # 转置以使时间步为第一维度
+
+        # 转换为分贝尺度
+        mel_log = librosa.power_to_db(mel_spectrogram, ref=np.max)
+
+        # 截取梅尔频谱，使梅尔频谱、音高、能量长度匹配
+        mel_log = mel_log[:len(f0_log)]
 
         # 对梅尔频谱、音高、能量归一化
         mel_normalized, f0_normalized, energy_normalized = (
