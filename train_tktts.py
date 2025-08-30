@@ -299,9 +299,11 @@ def train(
     dataloader: DataLoader,
     optimizer: optim.AdamW,
     scaler: GradScaler,
+    completed_iters: int,
+    writer: SummaryWriter,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[float, float, float, float, float]]:
+):
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
 
@@ -318,16 +320,10 @@ def train(
         dataloader: 训练数据加载器
         optimizer: 模型优化器
         scaler: 混合精度梯度缩放器
+        completed_iters: 已经完成多少次迭代，记录损失用
+        writer: 记录训练损失用的
         accumulation_steps: 梯度累积步数
         device: 训练设备（默认使用 CPU）
-
-    Returns:
-        每个梯度更新步骤的平均损失值列表，包括
-        - 后处理网络梅尔频谱损失
-        - 原始梅尔频谱损失
-        - 时长总和损失
-        - 音高预测损失
-        - 能量预测损失
 
     Examples:
         >>> losses = train(model, loader, opt)
@@ -336,14 +332,11 @@ def train(
     # 设置模型为训练模式
     model.train()
 
-    # 初始化损失列表
-    loss_results = []
-
-    # 计算训练多少次迭代
-    num_iterators = len(dataloader) // accumulation_steps * accumulation_steps
+    # 计算前向传播多少次
+    num_steps = len(dataloader) // accumulation_steps * accumulation_steps
 
     # 创建进度条，显示训练进度
-    progress_bar = tqdm(total=num_iterators, desc="Train")
+    progress_bar = tqdm(total=num_steps, desc="Train")
 
     # 当前累积步骤的总损失
     acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
@@ -352,7 +345,7 @@ def train(
     optimizer.zero_grad()
 
     # 遍历整个训练集
-    for step, batch in zip(range(num_iterators), dataloader):
+    for step, batch in zip(range(num_steps), dataloader):
         # 数据移至目标设备
         text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
@@ -379,14 +372,21 @@ def train(
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
 
-            loss_results.append((acc_postnet_loss, acc_audio_loss, acc_duration_loss, acc_pitch_loss, acc_energy_loss))  # 记录平均损失
-            acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0  # 重置累积损失
+            # 记录损失
+            for loss_name, loss in [
+                ("Post-Net", acc_postnet_loss),
+                ("Mel", acc_audio_loss),
+                ("Duration", acc_duration_loss),
+                ("Pitch", acc_pitch_loss),
+                ("Energy", acc_energy_loss)
+            ]:
+                writer.add_scalar(f"Train/{loss_name} Loss", loss, completed_iters + ((step + 1) // accumulation_steps) - 1)
+
+            # 重置累积损失
+            acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
 
         # 更新进度条
-        progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         progress_bar.update()
-
-    return loss_results
 
 
 @torch.inference_mode
@@ -522,12 +522,7 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train_loss = train(model, train_loader, optimizer, scaler, accumulation_steps=args.accumulation_steps, device=device)
-
-        # 记录训练损失
-        for n_iter, loss in enumerate(train_loss):
-            for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
-                writer.add_scalar(f"Train/{loss_name} Loss", loss[loss_idx], current_epoch * len(train_loss) + n_iter)
+        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
 
         # 如果没有有验证集，则跳过验证
         if not args.val_dataset:
@@ -562,8 +557,8 @@ def main(args: argparse.Namespace):
             # 预测长度与目标长度
             ("True Length", "Predicted Length", ([2], len), ([1], len)),
             # 文本长度与各类损失
-            ("Text Length", "Post-Net Audio Loss", ([0], identity), ([3, 0], identity)),
-            ("Text Length", "Original Audio Loss", ([0], identity), ([3, 1], identity)),
+            ("Text Length", "Post-Net Loss", ([0], identity), ([3, 0], identity)),
+            ("Text Length", "Mel Loss", ([0], identity), ([3, 1], identity)),
             ("Text Length", "Duration Loss", ([0], identity), ([3, 2], identity)),
             ("Text Length", "Pitch Loss", ([0], identity), ([3, 3], identity)),
             ("Text Length", "Energy Loss", ([0], identity), ([3, 4], identity)),

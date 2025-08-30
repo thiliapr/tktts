@@ -682,8 +682,8 @@ class FastSpeech2(nn.Module):
         energy = energy_prediction if energy_target is None else energy_target
 
         # 归一化音高，并离散化
-        pitch = ((pitch - pitch.min()) / (pitch.max() - pitch.min() + 1e-8) * (self.variance_bins - 1)).to(dtype=int)
-        energy = ((energy - energy.min()) / (energy.max() - energy.min() + 1e-8) * (self.variance_bins - 1)).to(dtype=int)
+        pitch = ((pitch - pitch.min()) / (pitch.max() - pitch.min() + 1e-7) * (self.variance_bins - 1)).to(dtype=int)
+        energy = ((energy - energy.min()) / (energy.max() - energy.min() + 1e-7) * (self.variance_bins - 1)).to(dtype=int)
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
