@@ -354,10 +354,10 @@ def train(
             postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
             all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, audio_length, pitch_target, energy_target, audio_padding_mask)  # 计算损失
             postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
-            loss = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
+            value = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
         # 梯度缩放与反向传播
-        scaler.scale(loss).backward()
+        scaler.scale(value).backward()
 
         # 更新累积损失
         acc_postnet_loss += postnet_loss.item() / accumulation_steps
@@ -372,15 +372,22 @@ def train(
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
 
-            # 记录损失
-            for loss_name, loss in [
-                ("Post-Net", acc_postnet_loss),
-                ("Mel", acc_audio_loss),
-                ("Duration", acc_duration_loss),
-                ("Pitch", acc_pitch_loss),
-                ("Energy", acc_energy_loss)
+            # 记录损失和缩放
+            for name, value in [
+                ("Train/Post-Net Loss", acc_postnet_loss),
+                ("Train/Mel Loss", acc_audio_loss),
+                ("Train/Duration Loss", acc_duration_loss),
+                ("Train/Pitch Loss", acc_pitch_loss),
+                ("Train/Energy Loss", acc_energy_loss),
+                ("Scale/Post-Net", model.postnet_scale.item()),
+                *[
+                    (f"Scale/{layer_type}.{layer_idx}.{module_name}", module_scale.item())
+                    for layer_type, layers in [("Encoder", model.encoder), ("Decoder", model.decoder)]
+                    for layer_idx, layer in enumerate(layers)
+                    for module_name, module_scale in [("Attention", layer.attention_scale), ("FeedForward", layer.feedforward_scale)]
+                ]
             ]:
-                writer.add_scalar(f"Train/{loss_name} Loss", loss, completed_iters + ((step + 1) // accumulation_steps) - 1)
+                writer.add_scalar(name, value, completed_iters + ((step + 1) // accumulation_steps) - 1)
 
             # 重置累积损失
             acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
@@ -533,7 +540,7 @@ def main(args: argparse.Namespace):
         val_results = validate(model, val_loader, device)
 
         # 绘制验证损失分布直方图
-        for loss_idx, loss_name in enumerate(["Post-Net Audio", "Original Audio", "Duration", "Pitch", "Energy"]):
+        for loss_idx, loss_name in enumerate(["Post-Net", "Mel", "Duration", "Pitch", "Energy"]):
             loss_values = [result[3][loss_idx] for result in val_results]
             writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
 
