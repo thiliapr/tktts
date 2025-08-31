@@ -171,8 +171,7 @@ python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.npz -
 ```bash
 tensorboard --logdir /path/to/ckpt/logdir
 ```
-然后在浏览器内访问`http://localhost:6006/`查看模型训练过程和状态，以便调整超参数。  
-比如说，你看到`Predicted Length`远远小于`True Length`，那么你应该在后面的训练将`--duration-weight`调整得更大。
+然后在浏览器内访问`http://localhost:6006/`查看模型训练过程和状态，以便调整超参数。
 
 ### 生成
 ```bash
