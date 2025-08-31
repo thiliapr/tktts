@@ -139,8 +139,8 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         if current_batch:
             self.batches.append(current_batch)
 
-        # 将批次列表反转，使得较大的批次优先用于训练，有助于及早发现和修复 OOM（内存溢出）等问题
-        self.batches.reverse()
+        # 扰乱批次顺序，增强模型泛化能力
+        generator.shuffle(self.batches)
 
     def __iter__(self) -> Iterator[list[int]]:
         yield from self.batches
