@@ -303,7 +303,7 @@ def train(
     writer: SummaryWriter,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-):
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
 
@@ -324,6 +324,9 @@ def train(
         writer: 记录训练损失用的
         accumulation_steps: 梯度累积步数
         device: 训练设备（默认使用 CPU）
+
+    Returns:
+        最后一步的梅尔频谱预测和目标
 
     Examples:
         >>> losses = train(model, loader, opt)
@@ -395,6 +398,11 @@ def train(
         # 更新进度条
         progress_bar.update()
 
+        # 最后一步时，记录训练集上预测和真实梅尔频谱对比
+        if step + 1 == num_steps:
+            sample_length = audio_length[0].item()
+            return audio_pred[0, :sample_length].detach().cpu().numpy(), audio_target[0, :sample_length].detach().cpu().numpy()
+
 
 @torch.inference_mode
 def validate(
@@ -445,8 +453,8 @@ def validate(
         for seq_idx in range(text_sequences.size(0)):
             loss_results.append((
                 (~text_padding_mask[seq_idx]).sum().item(),
-                postnet_pred[seq_idx, :(~audio_padding_mask[seq_idx]).sum()],
-                audio_target[seq_idx, :audio_length[seq_idx]],
+                postnet_pred[seq_idx, :(~audio_padding_mask[seq_idx]).sum()].cpu().numpy(),
+                audio_target[seq_idx, :audio_length[seq_idx]].cpu().numpy(),
                 tuple(loss[seq_idx].item() for loss in all_loss)
             ))
 
@@ -467,7 +475,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("num_epochs", type=int, help="训练的总轮数")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", type=pathlib.Path, required=True, help="训练集文件路径")
-    parser.add_argument("-v", "--val-dataset", type=pathlib.Path, help="验证集文件路径")
+    parser.add_argument("-v", "--val-dataset", type=pathlib.Path, required=True, help="验证集文件路径")
     parser.add_argument("-tt", "--train-max-batch-tokens", default=16384, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-tv", "--val-max-batch-tokens", default=32768, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
@@ -514,13 +522,12 @@ def main(args: argparse.Namespace):
     train_sampler = TkTTSDatasetSampler(train_dataset, args.train_max_batch_tokens)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
-    # 如果存在验证集，加载验证数据集
-    if args.val_dataset:
-        print("加载验证集 ...")
-        val_dataset = TkTTSDataset(args.val_dataset)
-        print("加载验证集批次采样器 ...")
-        val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
-        val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
+    # 加载验证数据集
+    print("加载验证集 ...")
+    val_dataset = TkTTSDataset(args.val_dataset)
+    print("加载验证集批次采样器 ...")
+    val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
+    val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 创建一个 SummaryWriter 实例，用于记录训练过程中的指标和可视化数据
     writer = SummaryWriter(args.ckpt_path / f"logdir/default")
@@ -532,11 +539,14 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
+        sample_pred, sample_target = train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
 
-        # 如果没有有验证集，则跳过验证
-        if not args.val_dataset:
-            continue
+        # 随机选择一个结果，绘制训练集预测频谱图和其目标频谱图
+        for title, mel in [("Predicted Mel-Spec", sample_pred), ("True Mel-Spec", sample_target)]:
+            figure, axis = plt.subplots()
+            librosa.display.specshow(mel.T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
+            axis.set_title(title)
+            writer.add_figure(f"Epoch {current_epoch + 1}/Train/Sample {title}", figure)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
@@ -545,22 +555,15 @@ def main(args: argparse.Namespace):
         # 绘制验证损失分布直方图
         for loss_idx, loss_name in enumerate(["Post-Net", "Mel", "Duration", "Pitch", "Energy"]):
             loss_values = [result[3][loss_idx] for result in val_results]
-            writer.add_histogram(f"Epoch {current_epoch + 1}/{loss_name} Loss Distribution", np.array(loss_values))
+            writer.add_histogram(f"Epoch {current_epoch + 1}/Validate/{loss_name} Loss Distribution", np.array(loss_values))
 
         # 随机选择一个结果，绘制预测频谱图和其目标频谱图
         result = random.choice(val_results)
         for title, indices in [("Predicted Mel-Spec", [1]), ("True Mel-Spec", [2])]:
-            # 创建图形和坐标轴
             figure, axis = plt.subplots()
-
-            # 绘制频谱图
-            librosa.display.specshow(extract_value(result, indices).cpu().numpy().T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
-
-            # 设置标题
+            librosa.display.specshow(extract_value(result, indices).T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
             axis.set_title(title)
-
-            # 将图形添加到记录器
-            writer.add_figure(f"Epoch {current_epoch + 1}/Sample {title}", figure)
+            writer.add_figure(f"Epoch {current_epoch + 1}/Validate/Sample {title}", figure)
 
         # 创建各种验证指标的散点图
         for x_label, y_label, (x_indices, x_value_fn), (y_indices, y_value_fn) in [
@@ -598,7 +601,7 @@ def main(args: argparse.Namespace):
             plt.tight_layout()
 
             # 将图形添加到记录器
-            writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
+            writer.add_figure(f"Epoch {current_epoch + 1}/Validate/{title}", figure)
 
     # 记录模型的文本和标签嵌入，覆盖上一个记录
     writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
