@@ -512,7 +512,10 @@ class FastSpeech2(nn.Module):
 
     Args:
         config: FastSpeech2Config 配置对象，包含模型的超参数设置。
-        dropout: Dropout 概率，用于防止过拟合。
+        encoder_dropout: 编码器 Dropout 概率。
+        decoder_dropout: 解码器 Dropout 概率。
+        variance_predictor_dropout: 变异性预测器 Dropout 概率，用于防止过拟合。
+        postnet_dropout: 后处理网络 Dropout 概率。
         device: 设备参数，用于指定模型运行的设备。
 
     Inputs:
@@ -537,7 +540,7 @@ class FastSpeech2(nn.Module):
         - audio_padding_mask: (batch_size)
     """
 
-    def __init__(self, config: FastSpeech2Config, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, config: FastSpeech2Config, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0., postnet_dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         self.dim_model = config.dim_head * config.num_heads  # 总模型维度
         self.variance_bins = config.variance_bins
@@ -547,14 +550,13 @@ class FastSpeech2(nn.Module):
         self.tag_embedding = nn.Embedding(config.num_tags, self.dim_model, device=device)
 
         # 编码器、解码器
-        layer = FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, dropout, device)
-        self.encoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_encoder_layers))
-        self.decoder = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_decoder_layers))
+        self.encoder = nn.ModuleList(FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, encoder_dropout, device) for _ in range(config.num_encoder_layers))
+        self.decoder = nn.ModuleList(FFTBlock(config.dim_head, config.num_heads, config.dim_feedforward, config.fft_conv1_kernel_size, config.fft_conv2_kernel_size, decoder_dropout, device) for _ in range(config.num_encoder_layers))
 
         # 预测器
-        self.duration_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
-        self.pitch_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
-        self.energy_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, dropout, device)
+        self.duration_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, variance_predictor_dropout, device)
+        self.pitch_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, variance_predictor_dropout, device)
+        self.energy_predictor = VariancePredictor(self.dim_model, config.predictor_kernel_size, variance_predictor_dropout, device)
 
         # 音高和能量嵌入
         self.pitch_embedding = nn.Embedding(config.variance_bins, self.dim_model, device=device)
@@ -567,7 +569,7 @@ class FastSpeech2(nn.Module):
         self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
 
         # 后处理网络
-        self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers, dropout, device)
+        self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers, postnet_dropout, device)
 
         # 后处理网络缩放因子
         self.postnet_scale = nn.Parameter(torch.zeros(1)).to(device)

@@ -20,7 +20,7 @@ from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_POSTNET_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
 from utils.model import FastSpeech2
 from utils.tookit import convert_to_tensor, create_padding_mask, extract_value, get_sequence_lengths, identity
 
@@ -472,7 +472,10 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-tv", "--val-max-batch-tokens", default=32768, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
     parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
-    parser.add_argument("-do", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合，默认为 %(default)s")
+    parser.add_argument("-de", "--encoder-dropout", default=DEFAULT_ENCODER_DROPOUT, type=float, help="编码器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
+    parser.add_argument("-dd", "--decoder-dropout", default=DEFAULT_DECODER_DROPOUT, type=float, help="解码器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
+    parser.add_argument("-dv", "--variance-predictor-dropout", default=DEFAULT_VARIANCE_PREDICTOR_DROPOUT, type=float, help="变异性预测器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
+    parser.add_argument("-dp", "--postnet-dropout", default=DEFAULT_POSTNET_DROPOUT, type=float, help="变异性预测器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
     return parser.parse_args(args)
 
@@ -486,7 +489,7 @@ def main(args: argparse.Namespace):
     tokenizer, model_state_dict, extra_config, model_config, tag_label_encoder, optimiezer_state_dict, completed_epochs = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
-    model = FastSpeech2(model_config, dropout=args.dropout)
+    model = FastSpeech2(model_config, args.encoder_dropout, args.decoder_dropout, args.variance_predictor_dropout, args.postnet_dropout)
     model.load_state_dict(model_state_dict)
 
     # 转移模型到设备
