@@ -689,7 +689,7 @@ class FastSpeech2(nn.Module):
         duration = duration / duration.sum(dim=1).unsqueeze(1)
 
         # 乘以音频时长总和，获取每一个 token 对应的时长
-        duration = duration * audio_length
+        duration = duration * audio_length.unsqueeze(1)
 
         # 长度调节
         x = self.length_regulator(x, duration, text_padding_mask)  # [batch_size, dim_model, audio_len]
