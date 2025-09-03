@@ -31,10 +31,10 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="根据标签和文本生成一个语音音频")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点路径")
     parser.add_argument("output_path", type=pathlib.Path, help="生成音频文件保存路径")
+    parser.add_argument("duration", type=float, help="音频的持续时长，单位为秒")
     parser.add_argument("text", type=str, help="文本")
     parser.add_argument("-p", "--positive-prompt", type=str, action="append", help="正面提示词，可以是多个词")
     parser.add_argument("-n", "--negative-prompt", type=str, action="append", help="负面提示词，可以是多个词")
-    parser.add_argument("-d", "--duration", type=float, help="指定音频的持续时长，默认由模型预测，单位为秒")
     return parser.parse_args(args)
 
 
@@ -75,14 +75,14 @@ def main(args: argparse.Namespace):
     negative_prompt = torch.tensor([negative_prompt], device=device) if negative_prompt else None
 
     # 将时长目标转换为张量
-    duration_sum_target = torch.tensor([1 + (args.duration * extra_config["sample_rate"]) // extra_config["hop_length"]], device=device) if args.duration else None
+    audio_length = torch.tensor([1 + (args.duration * extra_config["sample_rate"]) // extra_config["hop_length"]], device=device)
 
     # 生成音频
-    mel_prediction, _, _, _, _, _ = model(
+    mel_prediction, _, _, _, _ = model(
         text,
+        audio_length,
         positive_prompt,
         negative_prompt,
-        duration_sum_target=duration_sum_target
     )  # [1, audio_len, num_mels]
 
     # 去除批次维度，并转换为 NumPy 数组

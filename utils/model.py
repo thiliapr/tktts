@@ -3,7 +3,6 @@
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import copy
 import math
 from typing import NamedTuple, Optional
 import torch
@@ -40,6 +39,38 @@ class ScaleNorm(nn.Module):
     def forward(self, x):
         norm = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp(min=torch.finfo(x.dtype).eps)  # 计算L2范数并防止为零
         return self.scale * x / norm  # 对输入张量进行缩放归一化
+
+
+class MinMaxNorm(nn.Module):
+    """
+    最小-最大归一化模块
+
+    对输入张量进行最小-最大归一化处理，将数值范围缩放到 [0, 1] 区间。
+    支持处理包含填充值的序列数据，通过 padding_mask 标识需要忽略的填充位置。
+    归一化公式: (x - min) / (max - min + epsilon)
+
+    Inputs:
+        x: 输入特征张量，形状为 [batch_size, seq_len]
+        padding_mask: 布尔掩码张量，形状同 x，True 表示填充位置，False 表示有效数据位置
+
+    Outputs:
+        归一化后的张量，数值范围在 [0, 1] 之间
+    """
+    
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
+        # 将填充位置替换为无穷大和负无穷大，确保不影响极值计算
+        min_value = x.masked_fill(padding_mask, torch.inf).amin(dim=1)
+        max_value = x.masked_fill(padding_mask, -torch.inf).amax(dim=1)
+        
+        # 计算数值范围，添加极小值防止除零
+        value_range = max_value - min_value + torch.finfo(x.dtype).eps
+
+        # 应用最小-最大归一化
+        normalized_x = (x - min_value.unsqueeze(1)) / value_range.unsqueeze(1)
+        return normalized_x
 
 
 class MultiheadAttention(nn.Module):
@@ -253,8 +284,8 @@ class FFTBlock(nn.Module):
         # 归一化和缩放
         self.attention_norm = ScaleNorm(dim_model, device=device)
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
-        self.attention_scale = nn.Parameter(torch.zeros(1)).to(device)
-        self.feedforward_scale = nn.Parameter(torch.zeros(1)).to(device)
+        self.attention_scale = nn.Parameter(torch.zeros(1) + 1).to(device)
+        self.feedforward_scale = nn.Parameter(torch.zeros(1) + 1).to(device)
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -520,21 +551,19 @@ class FastSpeech2(nn.Module):
 
     Inputs:
         text: 输入文本的张量，形状为 (batch_size, text_len)。
+        audio_length: 总时长目标张量，形状为 (batch_size)。
         positive_prompt: 正向提示标签张量，形状为 (batch_size, num_positive_prompts)。
         negative_prompt: 负向提示标签张量，形状为 (batch_size, num_negative_prompts)。
         text_padding_mask: 文本填充掩码，形状同 text。填充位置为 True，非填充位置为 False。
         positive_prompt_mask: 正向提示标签填充掩码，形状同 positive_prompt。
         negative_prompt_mask: 负向提示标签填充掩码，形状同 negative_prompt。
-        duration_sum_target: 总时长目标张量，形状为 (batch_size)。
         pitch_target: 音高目标张量，形状为 (batch_size, audio_len)。
         energy_target: 能量目标张量，形状为 (batch_size, audio_len)。
 
     Outputs:
-        返回一个元组，包含后处理网络输出的梅尔频谱预测、原始梅尔频谱预测、对数尺度的时长预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
+        返回一个元组，包含后处理网络输出的梅尔频谱预测、原始梅尔频谱预测、音高预测、能量预测和音频预测填充掩码，形状分别为：
         - postnet_prediction: (batch_size, audio_len, num_mels)
         - mel_prediction: (batch_size, audio_len, num_mels)
-        - mel_prediction: (batch_size, audio_len, num_mels)
-        - duration_prediction: (batch_size, audio_len)
         - pitch_prediction: (batch_size, audio_len)
         - energy_prediction: (batch_size, audio_len)
         - audio_padding_mask: (batch_size)
@@ -565,6 +594,9 @@ class FastSpeech2(nn.Module):
         # 长度调节器
         self.length_regulator = DifferentiableLengthRegulator()
 
+        # Min-Max 归一化
+        self.min_max_norm = MinMaxNorm()
+
         # 梅尔频谱预测器
         self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
 
@@ -572,7 +604,7 @@ class FastSpeech2(nn.Module):
         self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers, postnet_dropout, device)
 
         # 后处理网络缩放因子
-        self.postnet_scale = nn.Parameter(torch.zeros(1)).to(device)
+        self.postnet_scale = nn.Parameter(torch.zeros(1) + 1).to(device)
 
         # 初始化权重
         nn.init.zeros_(self.mel_predictor.bias)
@@ -614,15 +646,15 @@ class FastSpeech2(nn.Module):
     def forward(
         self,
         text: torch.LongTensor,
+        audio_length: torch.LongTensor,
         positive_prompt: Optional[torch.LongTensor] = None,
         negative_prompt: Optional[torch.LongTensor] = None,
         text_padding_mask: Optional[torch.BoolTensor] = None,
         positive_prompt_mask: Optional[torch.BoolTensor] = None,
         negative_prompt_mask: Optional[torch.BoolTensor] = None,
-        duration_sum_target: Optional[torch.Tensor] = None,
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.BoolTensor]:
         # 如果没有提供填充掩码，则创建一个全为 False 的掩码
         if text_padding_mask is None:
             text_padding_mask = torch.zeros_like(text, device=text.device, dtype=bool)  # [batch_size, text_len]
@@ -644,33 +676,26 @@ class FastSpeech2(nn.Module):
         for layer in self.encoder:
             x = layer(x, text_padding_mask)
 
-        # 预测时长（对数尺度）
-        duration_prediction = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
+        # 预测时长
+        duration = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
 
-        # 将时长预测转换为原始尺度
-        duration = duration_prediction.exp()
-
-        # 防止时长小于零
-        duration = duration.clamp(min=0)
+        # 确保时长比例为零或正数
+        duration = duration - duration.amin(dim=1).unsqueeze(1)
 
         # 对每个样本，如果总持续时间为 0，则将每个元素设为 1，避免后续除零错误
-        duration += (duration.sum(dim=1, keepdim=True) == 0).to(dtype=duration.dtype)
+        duration = (duration + (duration.sum(dim=1, keepdim=True) == 0)).masked_fill(text_padding_mask, 0)
 
-        # 调节时长，使其总和与目标值相同
-        if duration_sum_target is not None:
-            duration, duration_sum_target = duration.float(), duration_sum_target.float()  # 转化为 float，避免精度丢失导致后面计算 duration_sum_pred != duration_sum_target
-            duration *= (duration_sum_target.unsqueeze(1) / duration.sum(dim=1, keepdim=True))  # 计算缩放，使 duration_sum_pred 等于 duration_sum_target
-            duration = duration.to(dtype=x.dtype)  # 转换回原来精度
+        # 计算时长比例
+        duration = duration / duration.sum(dim=1).unsqueeze(1)
+
+        # 乘以音频时长总和，获取每一个 token 对应的时长
+        duration = duration * audio_length
 
         # 长度调节
         x = self.length_regulator(x, duration, text_padding_mask)  # [batch_size, dim_model, audio_len]
 
-        # 实践证明，duration.sum(dim=1).ceil() != duration_sum_target 是经常的事，所以要填充或截断
-        if pitch_target is not None:
-            # 如果预测长度小于目标长度，则用零填充，否则截断到目标长度
-            if padding_len := max(pitch_target.size(1) - x.size(1), 0):
-                x = torch.cat([x, torch.zeros(x.size(0), padding_len, x.size(2), device=x.device)], dim=1)
-            x = x[:, :pitch_target.size(1)]
+        # 截断序列，防止与音高、能量目标形状不匹配
+        x = x[:, :int(audio_length.max())]
 
         # 生成音频填充掩码
         audio_padding_mask = duration.sum(dim=1).ceil().unsqueeze(1) <= torch.arange(x.size(1), device=x.device).unsqueeze(0)  # [batch_size, audio_len]
@@ -685,8 +710,8 @@ class FastSpeech2(nn.Module):
         energy = energy_prediction if energy_target is None else energy_target
 
         # 归一化音高，并离散化
-        pitch = ((pitch - pitch.min()) / (pitch.max() - pitch.min() + torch.finfo(pitch.dtype).eps) * (self.variance_bins - 1)).to(dtype=int)
-        energy = ((energy - energy.min()) / (energy.max() - energy.min() + torch.finfo(energy.dtype).eps) * (self.variance_bins - 1)).to(dtype=int)
+        pitch =  (self.min_max_norm(pitch, audio_padding_mask) * (self.variance_bins - 1)).to(dtype=int)
+        energy = (self.min_max_norm(energy, audio_padding_mask) * (self.variance_bins - 1)).to(dtype=int)
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
@@ -700,4 +725,4 @@ class FastSpeech2(nn.Module):
 
         # 通过后处理网络
         postnet_prediction = mel_prediction + self.postnet(mel_prediction, audio_padding_mask) * self.postnet_scale
-        return postnet_prediction, mel_prediction, duration_prediction, pitch_prediction, energy_prediction, audio_padding_mask
+        return postnet_prediction, mel_prediction, pitch_prediction, energy_prediction, audio_padding_mask
