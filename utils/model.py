@@ -685,12 +685,11 @@ class FastSpeech2(nn.Module):
         # 对每个样本，如果总持续时间为 0，则将每个元素设为 1，避免后续除零错误
         duration = (duration + (duration.sum(dim=1, keepdim=True) == 0)).masked_fill(text_padding_mask, 0)
 
+        # debug
+        print(duration)
+
         # 计算时长比例
         duration = duration / duration.sum(dim=1).unsqueeze(1)
-
-        # debug
-        if duration.isnan().any():
-            print(duration)
 
         # 乘以音频时长总和，获取每一个 token 对应的时长
         duration = duration * audio_length.unsqueeze(1)
