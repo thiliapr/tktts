@@ -688,6 +688,10 @@ class FastSpeech2(nn.Module):
         # 计算时长比例
         duration = duration / duration.sum(dim=1).unsqueeze(1)
 
+        # debug
+        if duration.isnan().any():
+            print(duration)
+
         # 乘以音频时长总和，获取每一个 token 对应的时长
         duration = duration * audio_length.unsqueeze(1)
 
