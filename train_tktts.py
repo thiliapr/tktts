@@ -386,7 +386,7 @@ def validate(
     model: FastSpeech2,
     dataloader: DataLoader,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[int, torch.Tensor, torch.Tensor, tuple[float, float, float, float]]]:
+) -> list[tuple[torch.Tensor, torch.Tensor, tuple[float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
     计算模型在验证集上的各项损失值，包括音频重建损失、音高损失和能量损失
@@ -401,7 +401,7 @@ def validate(
 
     Returns:
         包含每个样本详细损失信息的列表，每个元素为元组：
-        (文本序列长度, 经过后处理的梅尔频谱预测, 目标梅尔频谱, (后处理音频损失, 原始音频损失, 音高损失, 能量损失))
+        (经过后处理的梅尔频谱预测, 目标梅尔频谱, (后处理音频损失, 原始音频损失, 音高损失, 能量损失))
 
     Examples:
         >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
@@ -430,7 +430,6 @@ def validate(
         for seq_idx in range(text_sequences.size(0)):
             sample_length = audio_length[seq_idx].item()
             loss_results.append((
-                (~text_padding_mask[seq_idx]).sum().item(),
                 postnet_pred[seq_idx, :sample_length].cpu().numpy(),
                 audio_target[seq_idx, :sample_length].cpu().numpy(),
                 tuple(loss[seq_idx].item() for loss in all_loss)
@@ -517,66 +516,34 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        sample_pred, sample_target = train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
-
-        # 随机选择一个结果，绘制训练集预测频谱图和其目标频谱图
-        for title, mel in [("Predicted Mel-Spec", sample_pred), ("True Mel-Spec", sample_target)]:
-            figure, axis = plt.subplots()
-            librosa.display.specshow(mel.T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
-            axis.set_title(title)
-            writer.add_figure(f"Epoch {current_epoch + 1}/Train/Sample {title}", figure)
+        train_sample_pred, train_sample_target = train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
         val_results = validate(model, val_loader, device)
 
+        # 选择训练集最后一步预测，和验证集随机选择结果，绘制预测频谱图和其目标频谱图
+        val_sample_pred, val_sample_target, _ = random.choice(val_results)
+        for title, mel in [
+            ("Train/Sample Predicted Mel-Spec", train_sample_pred),
+            ("Train/Sample True Mel-Spec", train_sample_target),
+            ("Validate/Sample Predicted Mel-Spec", val_sample_pred),
+            ("Validate/Sample True Mel-Spec", val_sample_target),
+        ]:
+            # 创建图像和坐标轴
+            figure, axis = plt.subplots()
+
+            # 倒置为 [num_mels, num_frames] 维度，展示梅尔频谱
+            librosa.display.specshow(mel.T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
+
+            # 设置标题并添加图像到 writer
+            axis.set_title(title)
+            writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
+
         # 绘制验证损失分布直方图
         for loss_idx, loss_name in enumerate(["Post-Net", "Mel", "Pitch", "Energy"]):
-            loss_values = [result[3][loss_idx] for result in val_results]
+            loss_values = [all_loss[loss_idx] for _, _, all_loss in val_results]
             writer.add_histogram(f"Epoch {current_epoch + 1}/Validate/{loss_name} Loss Distribution", np.array(loss_values))
-
-        # 随机选择一个结果，绘制预测频谱图和其目标频谱图
-        result = random.choice(val_results)
-        for title, indices in [("Predicted Mel-Spec", [1]), ("True Mel-Spec", [2])]:
-            figure, axis = plt.subplots()
-            librosa.display.specshow(extract_value(result, indices).T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
-            axis.set_title(title)
-            writer.add_figure(f"Epoch {current_epoch + 1}/Validate/Sample {title}", figure)
-
-        # 创建各种验证指标的散点图
-        for x_label, y_label, x_indices, y_indices in [
-            # 文本长度与各类损失
-            ("Text Length", "Post-Net Loss", [0], [3, 0]),
-            ("Text Length", "Mel Loss", [0], [3, 1]),
-            ("Text Length", "Pitch Loss", [0], [3, 2]),
-            ("Text Length", "Energy Loss", [0], [3, 3]),
-        ]:
-            # 获取每个点的坐标
-            x_values, y_values = [], []
-            for result in val_results:
-                x_values.append(extract_value(result, x_indices))
-                y_values.append(extract_value(result, y_indices))
-
-            # 创建图形和坐标轴
-            figure, axis = plt.subplots(figsize=(10, 6))
-
-            # 绘制散点图
-            axis.scatter(x_values, y_values)
-
-            # 设置坐标轴标签和标题
-            title = f"{x_label} vs {y_label}"
-            axis.set_xlabel(x_label)
-            axis.set_ylabel(y_label)
-            axis.set_title(title)
-
-            # 添加网格线
-            axis.grid(True, linestyle="--", alpha=0.3)
-
-            # 优化布局
-            plt.tight_layout()
-
-            # 将图形添加到记录器
-            writer.add_figure(f"Epoch {current_epoch + 1}/Validate/{title}", figure)
 
     # 记录模型的文本和标签嵌入，覆盖上一个记录
     writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
