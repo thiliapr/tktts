@@ -680,7 +680,7 @@ class FastSpeech2(nn.Module):
         duration = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
 
         # 确保时长比例为零或正数
-        duration = duration - duration.amin(dim=1).unsqueeze(1)
+        duration = duration.clamp(min=0)
 
         # 对每个样本，如果总持续时间为 0，则将每个元素设为 1，避免后续除零错误
         duration = (duration + (duration.masked_fill(text_padding_mask, 0).sum(dim=1, keepdim=True) == 0)).masked_fill(text_padding_mask, 0)
