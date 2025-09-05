@@ -428,10 +428,11 @@ def validate(
 
         # 记录当前批次的损失信息
         for seq_idx in range(text_sequences.size(0)):
+            sample_length = audio_length[seq_idx].item()
             loss_results.append((
                 (~text_padding_mask[seq_idx]).sum().item(),
-                postnet_pred[seq_idx, :audio_length[seq_idx]].cpu().numpy(),
-                audio_target[seq_idx, :audio_length[seq_idx]].cpu().numpy(),
+                postnet_pred[seq_idx, :sample_length].cpu().numpy(),
+                audio_target[seq_idx, :sample_length].cpu().numpy(),
                 tuple(loss[seq_idx].item() for loss in all_loss)
             ))
 
