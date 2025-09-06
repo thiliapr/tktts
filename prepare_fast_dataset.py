@@ -115,6 +115,8 @@ def convert(
     for idx, (_, _, _, _, pitch, energy) in enumerate(dataset):
         dataset[idx][-1] = np.clip(((energy - energy_min) / (energy_max - energy_min)), 0, 1).astype(np.float32)
         dataset[idx][-2] = np.clip(((pitch - pitch_min) / (pitch_max - pitch_min)), -np.inf, 1).astype(np.float32)
+
+        # 统一标记清音值为 -1，和其他有效值范围 [0, 1] 明确区分开来
         dataset[idx][-2][pitch <= 0] = -1
 
     # 返回音频特征字典
