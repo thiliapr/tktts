@@ -552,7 +552,8 @@ def main(args: argparse.Namespace):
                 librosa.display.specshow(mel.T, y_axis="mel", x_axis="time", sr=extra_config["sample_rate"], fmax=8000, ax=mel_axis)
 
                 # 将清音部分绘制为空白
-                pitch[pitch < 0] = np.nan
+                pitch[pitch < 0.1] = np.nan
+                pitch = pitch.clamp(min=0, max=1)
 
                 # 绘制音高和能量
                 times = librosa.times_like(pitch, sr=extra_config["sample_rate"])
