@@ -41,38 +41,6 @@ class ScaleNorm(nn.Module):
         return self.scale * x / norm  # 对输入张量进行缩放归一化
 
 
-class MinMaxNorm(nn.Module):
-    """
-    最小-最大归一化模块
-
-    对输入张量进行最小-最大归一化处理，将数值范围缩放到 [0, 1] 区间。
-    支持处理包含填充值的序列数据，通过 padding_mask 标识需要忽略的填充位置。
-    归一化公式: (x - min) / (max - min + epsilon)
-
-    Inputs:
-        x: 输入特征张量，形状为 [batch_size, seq_len]
-        padding_mask: 布尔掩码张量，形状同 x，True 表示填充位置，False 表示有效数据位置
-
-    Outputs:
-        归一化后的张量，数值范围在 [0, 1] 之间
-    """
-    
-    def __init__(self) -> None:
-        super().__init__()
-    
-    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor) -> torch.Tensor:
-        # 将填充位置替换为无穷大和负无穷大，确保不影响极值计算
-        min_value = x.masked_fill(padding_mask, torch.inf).amin(dim=1)
-        max_value = x.masked_fill(padding_mask, -torch.inf).amax(dim=1)
-        
-        # 计算数值范围，添加极小值防止除零
-        value_range = max_value - min_value + torch.finfo(x.dtype).eps
-
-        # 应用最小-最大归一化
-        normalized_x = (x - min_value.unsqueeze(1)) / value_range.unsqueeze(1)
-        return normalized_x
-
-
 class MultiheadAttention(nn.Module):
     """
     多头自注意力机制模块，实现基于旋转位置编码(RoPE)的自注意力计算。
@@ -593,9 +561,6 @@ class FastSpeech2(nn.Module):
 
         # 长度调节器
         self.length_regulator = DifferentiableLengthRegulator()
-
-        # Min-Max 归一化
-        self.min_max_norm = MinMaxNorm()
 
         # 梅尔频谱预测器
         self.mel_predictor = nn.Linear(self.dim_model, config.num_mels, device=device)
