@@ -20,9 +20,9 @@ from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_POSTNET_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_POSTNET_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY, VOICED_THRESHOLD
 from utils.model import FastSpeech2
-from utils.tookit import convert_to_tensor, create_padding_mask, extract_value, get_sequence_lengths
+from utils.tookit import convert_to_tensor, create_padding_mask, get_sequence_lengths
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
@@ -552,7 +552,7 @@ def main(args: argparse.Namespace):
                 librosa.display.specshow(mel.T, y_axis="mel", x_axis="time", sr=extra_config["sample_rate"], fmax=8000, ax=mel_axis)
 
                 # 将清音部分绘制为空白
-                pitch[pitch < 0.1] = np.nan
+                pitch[pitch < VOICED_THRESHOLD] = np.nan
 
                 # 限制音高范围
                 pitch[~np.isnan(pitch)] = np.clip(pitch[~np.isnan(pitch)], 0, 1)

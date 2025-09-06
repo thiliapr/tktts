@@ -8,6 +8,7 @@ from typing import NamedTuple, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
+from utils.constants import VOICED_THRESHOLD
 
 
 class ScaleNorm(nn.Module):
@@ -678,7 +679,7 @@ class FastSpeech2(nn.Module):
         energy = (energy.clamp(min=0, max=1) * (self.variance_bins - 1)).to(dtype=int)
 
         # 将清音（预测值小于零）置为 0，其他离散化到 [1, variance_bins - 1]
-        pitch = (1 + pitch.clamp(min=0, max=1) * (self.variance_bins - 2)).masked_fill(pitch < 0.1, 0).to(dtype=int)
+        pitch = (1 + pitch.clamp(min=0, max=1) * (self.variance_bins - 2)).masked_fill(pitch < VOICED_THRESHOLD, 0).to(dtype=int)
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.pitch_embedding(pitch) + self.energy_embedding(energy)
