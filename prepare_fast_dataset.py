@@ -103,8 +103,12 @@ def convert(
         # 保存内容到内存
         dataset.append([text, positive_prompt, negative_prompt, mel, f0, energy])
 
+    # 标记有效音高（要统计的音高），防止清音影响音高最小值的统计
+    all_pitch = np.concatenate([pitch for _, _, _, _, pitch, _ in dataset])
+    valid_pitch = all_pitch[all_pitch > 0]
+
     # 计算音高、能量的百分位数
-    pitch_min, pitch_max = np.percentile(np.concatenate([pitch for _, _, _, _, pitch, _ in dataset]), [1, 99])
+    pitch_min, pitch_max = np.percentile(valid_pitch, [1, 99])
     energy_min, energy_max = np.percentile(np.concatenate([energy for _, _, _, _, _, energy in dataset]), [1, 99])
 
     # 归一化音高、能量
