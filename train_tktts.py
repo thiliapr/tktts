@@ -553,7 +553,9 @@ def main(args: argparse.Namespace):
 
                 # 将清音部分绘制为空白
                 pitch[pitch < 0.1] = np.nan
-                pitch = pitch.clamp(min=0, max=1)
+
+                # 限制音高范围
+                pitch[~np.isnan(pitch)] = np.clip(pitch[~np.isnan(pitch)], 0, 1)
 
                 # 绘制音高和能量
                 times = librosa.times_like(pitch, sr=extra_config["sample_rate"])
