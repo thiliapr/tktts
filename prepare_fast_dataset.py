@@ -181,7 +181,7 @@ def main(args: argparse.Namespace):
         subset = [item for chunk in split_data[:proportion] for item in chunk]
         split_data = split_data[proportion:]
 
-        # 转换为字典形式
+        # 转换为字典形式，并记录文本和音频序列的长度
         data = {}
         text_length = []
         audio_length = []
