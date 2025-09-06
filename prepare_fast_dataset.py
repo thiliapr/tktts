@@ -49,7 +49,7 @@ def convert(
     # 遍历每一个音频
     for audio_path, audio_metadata in tqdm(metadata):
         # 使用分词器将文本转换为序列 ID
-        text_sequences = tokenizer.encode(audio_metadata["text"])
+        text = tokenizer.encode(audio_metadata["text"])
 
         # 编码正面和负面提示词
         positive_prompt = tag_label_encoder.encode(audio_metadata["positive_prompt"])
@@ -68,16 +68,17 @@ def convert(
         )
 
         # 使用 stonemask 修正
-        f0_refined = pw.stonemask(audio, f0, time_axis, sample_rate)
+        f0 = pw.stonemask(audio, f0, time_axis, sample_rate)
 
         # 频谱包络
-        sp = pw.cheaptrick(audio, f0_refined, time_axis, sample_rate)
+        sp = pw.cheaptrick(audio, f0, time_axis, sample_rate)
 
         # 对每一帧的频谱包络求和
         energy = np.sum(sp, axis=1)
+        energy = np.log(energy + 1e-8)
 
         # 计算梅尔频谱特征
-        mel_spectrogram = librosa.feature.melspectrogram(
+        mel = librosa.feature.melspectrogram(
             y=audio,
             sr=sample_rate,
             n_fft=fft_length,
@@ -87,20 +88,20 @@ def convert(
         ).T  # 转置以使时间步为第一维度
 
         # 转换为分贝尺度
-        mel_log = librosa.power_to_db(mel_spectrogram, ref=np.max)
+        mel = librosa.power_to_db(mel, ref=np.max)
 
         # 截取梅尔频谱，使梅尔频谱、音高、能量长度匹配
-        mel_log = mel_log[:len(f0_refined)]
+        mel = mel[:len(f0)]
 
         # 对梅尔频谱逐样本归一化
-        mel_normalized = (mel_log - mel_log.min()) / (mel_log.max() - mel_log.min() + 1e-8)
+        mel = (mel - mel.min()) / (mel.max() - mel.min() + 1e-8)
 
         # 转换数据类型以节省储存空间
-        text_sequences, positive_prompt, negative_prompt = (np.array(x, dtype=int) for x in [text_sequences, positive_prompt, negative_prompt])
-        mel_normalized, f0_refined, energy = (x.astype(np.float32) for x in [mel_normalized, f0_refined, energy])
+        text, positive_prompt, negative_prompt = (np.array(x, dtype=int) for x in [text, positive_prompt, negative_prompt])
+        mel, f0, energy = (x.astype(np.float32) for x in [mel, f0, energy])
 
         # 保存内容到内存
-        dataset.append([text_sequences, positive_prompt, negative_prompt, mel_normalized, f0_refined, energy])
+        dataset.append([text, positive_prompt, negative_prompt, mel, f0, energy])
 
     # 计算音高、能量的百分位数
     pitch_min, pitch_max = np.percentile(np.concatenate([pitch for _, _, _, _, pitch, _ in dataset]), [1, 99])
@@ -108,8 +109,8 @@ def convert(
 
     # 归一化音高、能量
     for idx, (_, _, _, _, pitch, energy) in enumerate(dataset):
-        dataset[idx][-1] = ((energy - energy_min) / (energy_max - energy_min)).astype(np.float32)
-        dataset[idx][-2] = ((pitch - pitch_min) / (pitch_max - pitch_min)).astype(np.float32)
+        dataset[idx][-1] = np.clip(((energy - energy_min) / (energy_max - energy_min)), 0, 1).astype(np.float32)
+        dataset[idx][-2] = np.clip(((pitch - pitch_min) / (pitch_max - pitch_min)), -np.inf, 1).astype(np.float32)
         dataset[idx][-2][pitch <= 0] = -1
 
     # 返回音频特征字典
