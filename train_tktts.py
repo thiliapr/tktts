@@ -282,7 +282,7 @@ def train(
     writer: SummaryWriter,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
 
@@ -305,7 +305,7 @@ def train(
         device: 训练设备（默认使用 CPU）
 
     Returns:
-        最后一步的梅尔频谱预测和目标
+        最后一步的梅尔频谱、音高、能量预测和目标
 
     Examples:
         >>> losses = train(model, loader, opt)
@@ -375,10 +375,14 @@ def train(
         # 更新进度条
         progress_bar.update()
 
-        # 最后一步时，记录训练集上预测和真实梅尔频谱对比
+        # 最后一步时，记录训练集上预测和目标值
         if step + 1 == num_steps:
             sample_length = audio_length[0].item()
-            return audio_pred[0, :sample_length].detach().cpu().numpy(), audio_target[0, :sample_length].detach().cpu().numpy()
+            results = [
+                x[0, :sample_length].detach().cpu().numpy()
+                for x in [postnet_pred, audio_target, pitch_pred, pitch_target, energy_pred, energy_target]
+            ]
+            return results[::2], results[1::2]
 
 
 @torch.inference_mode
@@ -386,7 +390,7 @@ def validate(
     model: FastSpeech2,
     dataloader: DataLoader,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[torch.Tensor, torch.Tensor, tuple[float, float, float, float]]]:
+) -> list[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
     计算模型在验证集上的各项损失值，包括音频重建损失、音高损失和能量损失
@@ -401,7 +405,7 @@ def validate(
 
     Returns:
         包含每个样本详细损失信息的列表，每个元素为元组：
-        (经过后处理的梅尔频谱预测, 目标梅尔频谱, (后处理音频损失, 原始音频损失, 音高损失, 能量损失))
+        (预测, 目标, (后处理音频损失, 原始音频损失, 音高损失, 能量损失))
 
     Examples:
         >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
@@ -426,12 +430,16 @@ def validate(
             # 计算损失
             all_loss = fastspeech2_loss(postnet_pred, audio_pred, pitch_pred, energy_pred, audio_target, pitch_target, energy_target, audio_padding_mask)
 
-        # 记录当前批次的损失信息
+        # 记录当前批次的损失信息和预测-目标值
         for seq_idx in range(text_sequences.size(0)):
             sample_length = audio_length[seq_idx].item()
+            results = [
+                x[seq_idx, :sample_length].cpu().numpy()
+                for x in [postnet_pred, audio_target, pitch_pred, pitch_target, energy_pred, energy_target]
+            ]
             loss_results.append((
-                postnet_pred[seq_idx, :sample_length].cpu().numpy(),
-                audio_target[seq_idx, :sample_length].cpu().numpy(),
+                results[::2],
+                results[1::2],
                 tuple(loss[seq_idx].item() for loss in all_loss)
             ))
 
@@ -495,14 +503,12 @@ def main(args: argparse.Namespace):
     # 加载训练数据集
     print("加载训练集 ...")
     train_dataset = TkTTSDataset(args.train_dataset)
-    print("加载训练集批次采样器 ...")
     train_sampler = TkTTSDatasetSampler(train_dataset, args.train_max_batch_tokens)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 加载验证数据集
     print("加载验证集 ...")
     val_dataset = TkTTSDataset(args.val_dataset)
-    print("加载验证集批次采样器 ...")
     val_sampler = TkTTSDatasetSampler(val_dataset, args.val_max_batch_tokens)
     val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
@@ -516,28 +522,41 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train_sample_pred, train_sample_target = train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
+        train_pred, train_target = train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
         val_results = validate(model, val_loader, device)
 
         # 选择训练集最后一步预测，和验证集随机选择结果，绘制预测频谱图和其目标频谱图
-        val_sample_pred, val_sample_target, _ = random.choice(val_results)
-        for title, mel in [
-            ("Train/Sample Predicted Mel-Spec", train_sample_pred),
-            ("Train/Sample True Mel-Spec", train_sample_target),
-            ("Validate/Sample Predicted Mel-Spec", val_sample_pred),
-            ("Validate/Sample True Mel-Spec", val_sample_target),
+        val_pred, val_target, _ = random.choice(val_results)
+        for title, pred, target in [
+            ("Train Sample", train_pred, train_target),
+            ("Validate Sample", val_pred, val_target),
         ]:
             # 创建图像和坐标轴
-            figure, axis = plt.subplots()
+            figure, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
 
-            # 倒置为 [num_mels, num_frames] 维度，展示梅尔频谱
-            librosa.display.specshow(mel.T, x_axis="time", y_axis="mel", sr=extra_config["sample_rate"], fmax=8000, ax=axis)
+            # 绘制对比图
+            for mel_axis, figure_title, mel, pitch, energy in [
+                (ax1, "Predicted Mel Spectrogram", *pred),
+                (ax2, "True Mel Spectrogram", *target)
+            ]:
+                # 倒置为 [num_mels, num_frames] 维度，展示梅尔频谱
+                librosa.display.specshow(mel.T, y_axis="mel", x_axis="time", sr=extra_config["sample_rate"], fmax=8000, ax=mel_axis)
 
-            # 设置标题并添加图像到 writer
-            axis.set_title(title)
+                # 绘制音高和能量
+                times = librosa.times_like(pitch, sr=extra_config["sample_rate"])
+                normalized_axis = mel_axis.twinx()
+                normalized_axis.set_ylim(0, 1)
+                normalized_axis.plot(times, pitch, label="Pitch", color="blue")
+                normalized_axis.plot(times, energy, label="Energy", color="red")
+
+                # 设置标题并创造图例
+                mel_axis.set_title(figure_title)
+                normalized_axis.legend()
+
+            # 添加图像到 writer
             writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
         # 绘制验证损失分布直方图
