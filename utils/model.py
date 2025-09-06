@@ -666,15 +666,15 @@ class FastSpeech2(nn.Module):
         # 词嵌入
         x = self.embedding(text) * math.sqrt(self.dim_model)
 
+        # 编码器
+        for layer in self.encoder:
+            x = layer(x, text_padding_mask)
+
         # 标签嵌入
         if positive_prompt is not None:
             x = x + self.prompt_embedding(positive_prompt, positive_prompt_mask)
         if negative_prompt is not None:
             x = x - self.prompt_embedding(negative_prompt, negative_prompt_mask)
-
-        # 编码器
-        for layer in self.encoder:
-            x = layer(x, text_padding_mask)
 
         # 预测时长
         duration = self.duration_predictor(x, text_padding_mask)  # [batch_size, audio_len]
