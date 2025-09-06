@@ -352,13 +352,19 @@ def train(
             scaler.step(optimizer)  # 更新模型参数
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
+            global_step = completed_iters + ((step + 1) // accumulation_steps) - 1  # 计算全局步数
 
-            # 记录损失和缩放
+            # 记录损失
+            for loss_name, loss_value in [
+                ("Post-Net", acc_postnet_loss),
+                ("Mel", acc_audio_loss),
+                ("Pitch", acc_pitch_loss),
+                ("Energy", acc_energy_loss),
+            ]:
+                writer.add_scalars(f"Loss/{loss_name}", {"Train": loss_value}, global_step)
+
+            # 记录缩放
             for name, value in [
-                ("Train/Post-Net Loss", acc_postnet_loss),
-                ("Train/Mel Loss", acc_audio_loss),
-                ("Train/Pitch Loss", acc_pitch_loss),
-                ("Train/Energy Loss", acc_energy_loss),
                 ("Scale/Post-Net", model.postnet_scale.item()),
                 *[
                     (f"Scale/{layer_type}.{layer_idx}.{module_name}", module_scale.item())
@@ -367,7 +373,7 @@ def train(
                     for module_name, module_scale in [("Attention", layer.attention_scale), ("FeedForward", layer.feedforward_scale)]
                 ]
             ]:
-                writer.add_scalar(name, value, completed_iters + ((step + 1) // accumulation_steps) - 1)
+                writer.add_scalar(name, value, global_step)
 
             # 重置累积损失
             acc_postnet_loss = acc_audio_loss = acc_pitch_loss = acc_energy_loss = 0
@@ -562,10 +568,11 @@ def main(args: argparse.Namespace):
             # 添加图像到 writer
             writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
-        # 绘制验证损失分布直方图
+        # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Post-Net", "Mel", "Pitch", "Energy"]):
             loss_values = [all_loss[loss_idx] for _, _, all_loss in val_results]
             writer.add_histogram(f"Epoch {current_epoch + 1}/Validate/{loss_name} Loss Distribution", np.array(loss_values))
+            writer.add_scalars(f"Loss/{loss_name}", {"Valid": np.array(loss_values).mean()}, len(train_loader) // args.accumulation_steps * (current_epoch + 1))
 
     # 记录模型的文本和标签嵌入，覆盖上一个记录
     writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
