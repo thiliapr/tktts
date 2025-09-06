@@ -119,11 +119,11 @@ python merge_datasets.py /path/to/datasets/shirakami_fubuki/metadata.json /path/
 将其元数据合并到`/path/to/datasets/metadata.json`；此外，你可以将原来的`/path/to/datasets/shirakami_fubuki/metadata.json`和`/path/to/datasets/natsuiro_matsuri/metadata.json`删除
 
 ### 可选: 切割数据集
-你可以在训练前将数据集切割为训练集和验证集；这只需要将`metadata.json`拆分为`train.json`和`val.json`，你可以通过运行
+你可以在训练前将数据集切割，你可以通过运行
 ```bash
-python split_dataset.py /path/to/dataset/metadata.json train.json:9 val.json:1
+python split_dataset.py /path/to/dataset/metadata.json test.json:1 nul:99
 ```
-这样，你的`/path/to/dataset`目录应出现占总数据九成比例`train.json`和一成比例的`val.json`。
+这样，你的`/path/to/dataset`目录应出现总数据1%的`test.json`。这主要用于与小规模数据集测试。
 
 ### 训练分词器
 ```bash
@@ -156,9 +156,9 @@ python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
 
 考虑到兼容两种加载方式（加载原始通用数据集和快速训练数据集）的代码很难维护（见[tkaimidi](https://github.com/thiliapr/tkaimidi)一直没维护），所以这里强制要求必须转换为快速训练数据集。你可以运行
 ```bash
-python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset.npz
+python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset train:8 val:1 test:1
 ```
-数据集将会被压缩为一个文件到`/path/to/fast_dataset.npz`
+数据集将会被分割为 10 份，其中 8 份、两个 1 份分别保存到`/path/to/fast_dataset/train.npz`、`/path/to/fast_dataset/val.npz`、`/path/to/fast_dataset/test.npz`
 
 ### 训练模型
 ```bash

@@ -545,6 +545,9 @@ def main(args: argparse.Namespace):
                 # 倒置为 [num_mels, num_frames] 维度，展示梅尔频谱
                 librosa.display.specshow(mel.T, y_axis="mel", x_axis="time", sr=extra_config["sample_rate"], fmax=8000, ax=mel_axis)
 
+                # 将清音部分绘制为空白
+                pitch[pitch < 0] = np.nan
+
                 # 绘制音高和能量
                 times = librosa.times_like(pitch, sr=extra_config["sample_rate"])
                 normalized_axis = mel_axis.twinx()

@@ -5,6 +5,7 @@
 
 import argparse
 import pathlib
+import random
 from typing import Optional
 import librosa
 import orjson
@@ -25,18 +26,9 @@ def convert(
     win_length: int,
     hop_length: int,
     num_mels: int,
-) -> dict[str, np.ndarray]:
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """
     音频数据处理与特征提取管道，将原始音频转换为训练所需的特征格式并保存
-
-    工作流程：
-    1. 遍历音频元数据列表，对每个音频文件进行处理
-    2. 使用分词器将文本转换为序列ID
-    3. 使用标签编码器处理正负提示词
-    4. 加载音频并进行重采样和静音修剪
-    5. 提取梅尔频谱、基频和能量特征
-    6. 对特征进行归一化处理
-    7. 将处理后的特征保存为压缩的NPZ格式文件
 
     Args:
         metadata: 音频文件路径和对应元数据的列表
@@ -49,15 +41,13 @@ def convert(
         num_mels: 梅尔带数量
 
     Returns:
-        包含所有处理文件元数据的字典
+        包含所有处理文件元数据的列表、每个文件的文本序列长度、音频序列长度
     """
-    # 初始化音频特征字典
-    dataset = {}
-    text_length = []
-    audio_length = []
+    # 初始化音频特征列表
+    dataset = []
 
     # 遍历每一个音频
-    for task_id, (audio_path, audio_metadata) in enumerate(tqdm(metadata)):
+    for audio_path, audio_metadata in tqdm(metadata):
         # 使用分词器将文本转换为序列 ID
         text_sequences = tokenizer.encode(audio_metadata["text"])
 
@@ -102,29 +92,25 @@ def convert(
         # 截取梅尔频谱，使梅尔频谱、音高、能量长度匹配
         mel_log = mel_log[:len(f0_refined)]
 
-        # 对梅尔频谱、音高、能量归一化
-        mel_normalized, f0_normalized, energy_normalized = (
-            (x - x.min()) / (x.max() - x.min() + 1e-8)
-            for x in [mel_log, f0_refined, energy]
-        )
+        # 对梅尔频谱逐样本归一化
+        mel_normalized = (mel_log - mel_log.min()) / (mel_log.max() - mel_log.min() + 1e-8)
 
         # 转换数据类型以节省储存空间
         text_sequences, positive_prompt, negative_prompt = (np.array(x, dtype=int) for x in [text_sequences, positive_prompt, negative_prompt])
-        mel_normalized, f0_normalized, energy_normalized = (x.astype(np.float32) for x in [mel_normalized, f0_normalized, energy_normalized])
+        mel_normalized, f0_refined, energy = (x.astype(np.float32) for x in [mel_normalized, f0_refined, energy])
 
         # 保存内容到内存
-        text_length.append(len(text_sequences))
-        audio_length.append(len(mel_normalized))
-        dataset[f"{task_id}:text"] = text_sequences
-        dataset[f"{task_id}:positive_prompt"] = positive_prompt
-        dataset[f"{task_id}:negative_prompt"] = negative_prompt
-        dataset[f"{task_id}:mel"] = mel_normalized
-        dataset[f"{task_id}:pitch"] = f0_normalized
-        dataset[f"{task_id}:energy"] = energy_normalized
+        dataset.append([text_sequences, positive_prompt, negative_prompt, mel_normalized, f0_refined, energy])
 
-    # 保存长度到内存
-    dataset["text_length"] = np.array(text_length)
-    dataset["audio_length"] = np.array(audio_length)
+    # 计算音高、能量的百分位数
+    pitch_min, pitch_max = np.percentile(np.concatenate([pitch for _, _, _, _, pitch, _ in dataset]), [1, 99])
+    energy_min, energy_max = np.percentile(np.concatenate([energy for _, _, _, _, _, energy in dataset]), [1, 99])
+
+    # 归一化音高、能量
+    for idx, (_, _, _, _, pitch, energy) in enumerate(dataset):
+        dataset[idx][-1] = ((energy - energy_min) / (energy_max - energy_min)).astype(np.float32)
+        dataset[idx][-2] = ((pitch - pitch_min) / (pitch_max - pitch_min)).astype(np.float32)
+        dataset[idx][-2][pitch <= 0] = -1
 
     # 返回音频特征字典
     return dataset
@@ -143,7 +129,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="准备专用于特定检查点训练的数据集，用于加快训练时数据加载速度。注意：为此检查点准备的数据集不能直接用于其他参数配置的检查点训练。")
     parser.add_argument("dataset_metadata", type=pathlib.Path, help="数据集元数据文件的完整路径。该文件应包含音频文件路径及其对应文本和标签信息的 JSON 格式数据")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="目标检查点文件的完整路径。数据集将根据此检查点的配置参数（如分词器、采样率等）进行适配准备")
-    parser.add_argument("output_path", type=pathlib.Path, help="处理后的特征数据集输出路径。文件后缀名推荐使用`.npz`标明这是一个 NumPy 数组文件，如`dataset/train.npz`")
+    parser.add_argument("output_dir", type=pathlib.Path, help="处理后的特征数据集输出目录")
+    parser.add_argument("splits", type=str, action="append", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
     return parser.parse_args(args)
 
 
@@ -157,6 +144,15 @@ def main(args: argparse.Namespace):
         for audio_path, audio_metadata in orjson.loads(args.dataset_metadata.read_bytes()).items()
     ]
 
+    # 解析拆分配置
+    splits = [str_split.split(":", 1) for str_split in args.splits]
+    splits = [(filename, int(proportion)) for filename, proportion in splits]
+    total_proportion = sum(proportion for _, proportion in splits)
+
+    # 验证数据集大小是否满足拆分需求
+    if len(metadata) < total_proportion:
+        raise RuntimeError(f"音频数据数量（{len(metadata)}）小于指定的拆分比例总和（{total_proportion}）")
+
     # 打印开始转换消息
     print(f"正在转换 {len(metadata)} 个音频及元数据 ...")
 
@@ -164,13 +160,39 @@ def main(args: argparse.Namespace):
     processed_metadata = convert(metadata, tokenizer, tag_label_encoder, extra_config["sample_rate"], extra_config["fft_length"], extra_config["win_length"], extra_config["hop_length"], model_config.num_mels)
 
     # 创建输出目录
-    args.output_path.parent.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 保存到输出路径
-    np.savez_compressed(args.output_path, **processed_metadata)
+    # 随机打乱元数据
+    random.shuffle(processed_metadata)
 
-    # 打印保存成功信息
-    print(f"预处理完成，快速训练数据集已保存到`{args.output_path}`")
+    # 按比例拆分数据
+    split_data = [processed_metadata[rank::total_proportion] for rank in range(total_proportion)]
+
+    # 写入拆分后的文件
+    for filename, proportion in splits:
+        # 从拆分数据中提取对应比例的数据
+        subset = [item for chunk in split_data[:proportion] for item in chunk]
+        split_data = split_data[proportion:]
+
+        # 转换为字典形式
+        data = {}
+        text_length = []
+        audio_length = []
+        for task_id, (text, positive_prompt, negative_prompt, mel, pitch, energy) in enumerate(subset):
+            data |= {
+                f"{task_id}:text": text,
+                f"{task_id}:positive_prompt": positive_prompt,
+                f"{task_id}:negative_prompt": negative_prompt,
+                f"{task_id}:mel": mel,
+                f"{task_id}:pitch": pitch,
+                f"{task_id}:energy": energy,
+            }
+            text_length.append(len(text))
+            audio_length.append(len(mel))
+
+        # 将子集写入对应文件
+        np.savez_compressed(args.output_dir / f"{filename}.npz", **data, audio_length=np.array(audio_length), text_length=np.array(text_length))
+        print(f"数据集的 {proportion}/{total_proportion}，即 {len(subset)} 条数据，已保存到 {filename}.npz")
 
 
 if __name__ == "__main__":
