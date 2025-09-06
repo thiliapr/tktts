@@ -284,8 +284,8 @@ class FFTBlock(nn.Module):
         # 归一化和缩放
         self.attention_norm = ScaleNorm(dim_model, device=device)
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
-        self.attention_scale = nn.Parameter(torch.zeros(1) + 1).to(device)
-        self.feedforward_scale = nn.Parameter(torch.zeros(1) + 1).to(device)
+        self.attention_scale = nn.Parameter(torch.zeros(1)).to(device)
+        self.feedforward_scale = nn.Parameter(torch.zeros(1)).to(device)
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -604,7 +604,7 @@ class FastSpeech2(nn.Module):
         self.postnet = PostNet(config.num_mels, config.postnet_hidden_dim, config.postnet_kernel_size, config.num_postnet_layers, postnet_dropout, device)
 
         # 后处理网络缩放因子
-        self.postnet_scale = nn.Parameter(torch.zeros(1) + 1).to(device)
+        self.postnet_scale = nn.Parameter(torch.zeros(1)).to(device)
 
         # 初始化权重
         nn.init.zeros_(self.mel_predictor.bias)
