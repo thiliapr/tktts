@@ -159,6 +159,23 @@ python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
 python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /path/to/fast_dataset train:8 val:1 test:1
 ```
 数据集将会被分割为 10 份，其中 8 份、两个 1 份分别保存到`/path/to/fast_dataset/train.npz`、`/path/to/fast_dataset/val.npz`、`/path/to/fast_dataset/test.npz`
+> [!TIP]
+> 值得注意的是，由于音高和能量是全局归一化的，所以
+> ```bash
+> # 正确的做法
+> python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/fast_dataset train:9 val:1
+> ```
+> 和
+> ```bash
+> # 错误的示例
+> python split_dataset.py /path/to/dataset/metadata.json train.json:9 val.json:1
+> python prepare_fast_dataset.py /path/to/dataset/train.json /path/to/fast_dataset train:1
+> python prepare_fast_dataset.py /path/to/dataset/val.json /path/to/fast_dataset val:1
+> ```
+> 的结果是**不**一样的：因为在第一个命令，`train`和`val`共用一个统计数据（`pitch/energy`的`min/max`值），而在第二个示例，训练集和验证集的`pitch`和`energy`分布不同，所以用这种方式测出的`val_pitch_loss`和`val_energy_loss`不具有参考价值。  
+> 但是`val_postnet_loss`和`val_audio_loss`不会受到影响，仍然有意义。这是因为 Mel 频谱的归一化方式是逐样本进行的，而不是基于全局统计数据。
+> 所以如果实在要用这种方法，请忽略`val_pitch_loss`和`val_energy_loss`，只看`val_postnet_loss`和`val_audio_loss`。
+
 
 ### 训练模型
 ```bash
