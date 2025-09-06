@@ -137,7 +137,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("dataset_metadata", type=pathlib.Path, help="数据集元数据文件的完整路径。该文件应包含音频文件路径及其对应文本和标签信息的 JSON 格式数据")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="目标检查点文件的完整路径。数据集将根据此检查点的配置参数（如分词器、采样率等）进行适配准备")
     parser.add_argument("output_dir", type=pathlib.Path, help="处理后的特征数据集输出目录")
-    parser.add_argument("splits", type=str, action="append", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
+    parser.add_argument("splits", type=str, nargs="+", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
     return parser.parse_args(args)
 
 
