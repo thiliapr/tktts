@@ -79,14 +79,12 @@ def convert(
 
         # 使用 stonemask 修正
         f0_refined = pw.stonemask(audio, f0, time_axis, sample_rate)
-        f0_log = np.log(f0_refined + 1e-8)
 
         # 频谱包络
         sp = pw.cheaptrick(audio, f0_refined, time_axis, sample_rate)
 
         # 对每一帧的频谱包络求和
         energy = np.sum(sp, axis=1)
-        energy_log = np.log(energy + 1e-8)
 
         # 计算梅尔频谱特征
         mel_spectrogram = librosa.feature.melspectrogram(
@@ -102,23 +100,17 @@ def convert(
         mel_log = librosa.power_to_db(mel_spectrogram, ref=np.max)
 
         # 截取梅尔频谱，使梅尔频谱、音高、能量长度匹配
-        mel_log = mel_log[:len(f0_log)]
+        mel_log = mel_log[:len(f0_refined)]
 
         # 对梅尔频谱、音高、能量归一化
         mel_normalized, f0_normalized, energy_normalized = (
             (x - x.min()) / (x.max() - x.min() + 1e-8)
-            for x in [mel_log, f0_log, energy_log]
+            for x in [mel_log, f0_refined, energy]
         )
 
         # 转换数据类型以节省储存空间
-        text_sequences, positive_prompt, negative_prompt = (
-            np.array(x, dtype=int)
-            for x in [text_sequences, positive_prompt, negative_prompt]
-        )
-        mel_normalized, f0_normalized, energy_normalized = (
-            x.astype(np.float32)
-            for x in [mel_normalized, f0_normalized, energy_normalized]
-        )
+        text_sequences, positive_prompt, negative_prompt = (np.array(x, dtype=int) for x in [text_sequences, positive_prompt, negative_prompt])
+        mel_normalized, f0_normalized, energy_normalized = (x.astype(np.float32) for x in [mel_normalized, f0_normalized, energy_normalized])
 
         # 保存内容到内存
         text_length.append(len(text_sequences))
