@@ -86,7 +86,7 @@ def main(args: argparse.Namespace):
         raise RuntimeError("FFT 窗口长度必须为偶数。")
     # 检查注意力头的维度是否为偶数
     if args.dim_head % 2 == 1:
-        raise RuntimeError("注意力头的维度必须为偶数。")
+        raise RuntimeError("由于模型使用旋转位置编码，注意力头的维度必须为偶数。")
 
     # 加载分词器
     if not (tokenizer_path := args.ckpt_path / "tokenizer").exists():
