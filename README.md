@@ -241,7 +241,6 @@ python prepare_fast_dataset.py /path/to/dataset/metadata.json /path/to/ckpt /pat
 > 但是`val_postnet_loss`和`val_audio_loss`不会受到影响，仍然有意义。这是因为 Mel 频谱的归一化方式是逐样本进行的，而不是基于全局统计数据。
 > 所以如果实在要用这种方法，请忽略`val_pitch_loss`和`val_energy_loss`，只看`val_postnet_loss`和`val_audio_loss`。
 
-
 ### 训练模型
 ```bash
 python train_tktts.py <num_epochs> /path/to/ckpt -t /path/to/dataset/train.npz -v /path/to/dataset/val.npz
