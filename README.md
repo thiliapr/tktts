@@ -256,8 +256,9 @@ tensorboard --logdir /path/to/ckpt/logdir
 
 ### 生成
 ```bash
+python list_phones_from_ckpt.py /path/to/ckpt  # 列出所有音素
 python list_tags_from_ckpt.py /path/to/ckpt  # 列出所有标签
-python generate.py /path/to/ckpt output.wav ホロライブ所属のバーチャルyoutuber、夏色まつりだよっ！！ -p character:夏色まつり -p source:youtube -p sex:female -p age:teenager -n sex:male  # 用`-p`指定正面提示，`-n`指定负面提示
+python generate.py /path/to/ckpt 10 output.wav mː b ɯ ŋ k a b e s oː k a ts ɨ t o ɕ -p character:夏色まつり -p source:youtube -p sex:female -p age:teenager -n sex:male  # 用`-p`指定正面提示，`-n`指定负面提示
 ```
 
 ### 注意事项
