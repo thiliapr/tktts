@@ -32,8 +32,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点路径")
     parser.add_argument("output_path", type=pathlib.Path, help="生成音频文件保存路径")
     parser.add_argument("duration", type=float, help="音频的持续时长，单位为秒")
-    parser.add_argument("text", type=str, help="文本")
-    parser.add_argument("-p", "--positive-prompt", type=str, action="append", help="正面提示词，可以是多个词")
+    parser.add_argument("phonemes", type=str, nargs="+", help="音素，用空格分隔。音素列表可以使用`list_phones_from_ckpt.py`查看。")
+    parser.add_argument("-p", "--positive-prompt", type=str, action="append", help="正面提示词，可以是多个词。提示词列表可以使用`list_tags_from_ckpt.py`查看。")
     parser.add_argument("-n", "--negative-prompt", type=str, action="append", help="负面提示词，可以是多个词")
     return parser.parse_args(args)
 
@@ -41,7 +41,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
 @torch.inference_mode
 def main(args: argparse.Namespace):
     # 加载检查点
-    tokenizer, model_state, extra_config, model_config, tag_label_encoder = load_checkpoint(args.ckpt_path)
+    phoneme_encoder, model_state, extra_config, model_config, tag_label_encoder = load_checkpoint(args.ckpt_path)
 
     # 创建模型并加载状态
     model = FastSpeech2(model_config)
@@ -51,14 +51,14 @@ def main(args: argparse.Namespace):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device).eval()
 
-    # 给输入文本分词
-    text = tokenizer.encode(args.text)
+    # 打印音素
+    print(f"输入音素: {args.phonemes}")
 
-    # 打印分词效果
-    print(f"分词后的文本: {tokenizer.decode(text)}")
+    # 将音素转换为 ID
+    phonemes = phoneme_encoder.encode(args.phonemes)
 
-    # 将分词后的文本转换为张量并转移到设备上
-    text = torch.tensor([text], device=device)
+    # 将音素转换为张量并转移到设备上
+    phonemes = torch.tensor([phonemes], device=device)
 
     # 创建正面和负面提示词的编码
     positive_prompt = tag_label_encoder.encode(args.positive_prompt) if args.positive_prompt else None
@@ -78,8 +78,8 @@ def main(args: argparse.Namespace):
     audio_length = torch.tensor([1 + (args.duration * extra_config["sample_rate"]) // extra_config["hop_length"]], device=device)
 
     # 生成音频
-    mel_prediction, _, _, _, _ = model(
-        text,
+    mel_prediction, _, _, _, _, _ = model(
+        phonemes,
         audio_length,
         positive_prompt,
         negative_prompt,

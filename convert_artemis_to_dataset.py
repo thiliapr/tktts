@@ -6,10 +6,9 @@
 import argparse
 import pathlib
 import shutil
-from typing import Optional
+from typing import Any, Optional
 import orjson
 from tqdm import tqdm
-from utils.dataset import AudioMetadata
 
 
 def convert_and_save(
@@ -18,7 +17,7 @@ def convert_and_save(
     output_dir: pathlib.Path,
     global_positive_prompt: list[str],
     global_negative_prompt: list[str]
-) -> dict[str, AudioMetadata]:
+) -> dict[str, dict[str, Any]]:
     """
     将脚本文件中的对话转换并保存到指定目录。
 

@@ -13,7 +13,6 @@ import torch
 import numpy as np
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
-from transformers import AutoTokenizer
 from utils.checkpoint import TagLabelEncoder, save_checkpoint
 from utils.constants import DEFAULT_FFT_CONV1_KERNEL_SIZE, DEFAULT_FFT_CONV2_KERNEL_SIZE, DEFAULT_FFT_LENGTH, DEFAULT_HOP_LENGTH, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_DIM_HEAD, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_MELS, DEFAULT_NUM_POSTNET_LAYERS, DEFAULT_POSTNET_HIDDEN_DIM, DEFAULT_POSTNET_KERNEL_SIZE, DEFAULT_PREDICTOR_KERNEL_SIZE, DEFAULT_SAMPLE_RATE, DEFAULT_WIN_LENGTH, DEFAULT_VARIANCE_BINS
 from utils.model import FastSpeech2, FastSpeech2Config
@@ -58,6 +57,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="初始化一个检查点")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点保存目录路径")
+    parser.add_argument("phoneme_path", type=pathlib.Path, help="包含标签的文件路径，格式是每行一个音素")
     parser.add_argument("-t", "--tags-file", type=pathlib.Path, help="包含标签的文件路径，格式是每行一个标签，默认不使用标签")
     parser.add_argument("-nm", "--num-mels", type=int, default=DEFAULT_NUM_MELS, help="梅尔频率倒谱系数(MFCC)的数量，默认为 %(default)s")
     parser.add_argument("-sr", "--sample-rate", type=int, default=DEFAULT_SAMPLE_RATE, help="目标采样率(Hz)，默认为 %(default)s")
@@ -88,10 +88,10 @@ def main(args: argparse.Namespace):
     if args.dim_head % 2 == 1:
         raise RuntimeError("由于模型使用旋转位置编码，注意力头的维度必须为偶数。")
 
-    # 加载分词器
-    if not (tokenizer_path := args.ckpt_path / "tokenizer").exists():
-        raise RuntimeError("你应该先训练分词器再初始化检查点，因为创建模型模型需要提供分词器的大小。")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    # 创建音素编码器
+    phones = [phone for phone in args.phoneme_path.read_text("utf-8").splitlines() if phone.strip()]
+    phoneme = {phone: idx for idx, phone in enumerate(phones)}
+    phoneme_encoder = TagLabelEncoder(phoneme)
 
     # 检查标签文件是否存在
     if args.tags_file:
@@ -115,7 +115,7 @@ def main(args: argparse.Namespace):
 
     # 初始化模型
     model = FastSpeech2(FastSpeech2Config(
-        vocab_size=len(tokenizer),
+        vocab_size=len(phoneme_encoder),
         num_tags=len(tag_label),
         num_mels=args.num_mels,
         num_heads=args.num_heads,
@@ -147,12 +147,11 @@ def main(args: argparse.Namespace):
     # 创建 SummaryWriter，可视化模型初始化状态
     shutil.rmtree(args.ckpt_path / "logdir", ignore_errors=True)
     writer = SummaryWriter(args.ckpt_path / "logdir/default")
-    writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag="Text Embedding")
     writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag="Tag Embedding")
     writer.close()
 
     # 保存为检查点
-    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), 0, generation_config, tag_label_encoder)
+    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), 0, generation_config, phoneme_encoder, tag_label_encoder)
 
     # 打印初始化成功信息
     print(f"检查点初始化成功，已保存到 {args.ckpt_path}")

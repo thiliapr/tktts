@@ -8,7 +8,6 @@ from typing import Any, Optional, TypedDict
 from collections.abc import Mapping
 import orjson
 import torch
-from transformers import AutoTokenizer
 from utils.model import FastSpeech2Config
 
 
@@ -80,6 +79,7 @@ def save_checkpoint(
     optimizer_state: Mapping[str, Any],
     completed_epochs: int,
     extra_config: Optional[TkTTSExtraConfig] = None,
+    phoneme_encoder: Optional[TagLabelEncoder] = None,
     tag_label_encoder: Optional[TagLabelEncoder] = None
 ):
     """
@@ -91,6 +91,7 @@ def save_checkpoint(
         optimizer_state: 要保存的优化器的状态字典
         completed_epochs: 总共训练了多少个 Epoch
         extra_config: 模型额外配置（用于预处理数据、推理生成）
+        phoneme_encoder: 音素编码器，用于处理音素的编码和解码
         tag_label_encoder: 标签编码器，用于处理标签的编码和解码
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
@@ -104,12 +105,16 @@ def save_checkpoint(
     if extra_config:
         (path / "extra_config.json").write_bytes(orjson.dumps(extra_config))
 
+    # 保存音素编码器
+    if phoneme_encoder:
+        (path / "phoneme.json").write_bytes(orjson.dumps(phoneme_encoder.vocab))
+
     # 保存标签编码器
     if tag_label_encoder:
         (path / "tags.json").write_bytes(orjson.dumps(tag_label_encoder.vocab))
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], TkTTSExtraConfig, FastSpeech2Config, TagLabelEncoder]:
+def load_checkpoint(path: pathlib.Path) -> tuple[TagLabelEncoder, Mapping[str, Any], TkTTSExtraConfig, FastSpeech2Config, TagLabelEncoder]:
     """
     从指定路径加载模型的检查点（用于推理）。
 
@@ -117,15 +122,15 @@ def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any
         path: 加载检查点的目录路径
 
     Returns:
-        分词器、模型的状态、模型额外的配置、用于创建模型的配置、标签编码器
+        音素编码器、模型的状态、模型额外的配置、用于创建模型的配置、标签编码器
 
     Examples:
-        >>> tokenizer, sd, extra_config, model_config, tag_label_encoder = load_checkpoint(pathlib.Path("ckpt"))
+        >>> phoneme_encoder, sd, extra_config, model_config, tag_label_encoder = load_checkpoint(pathlib.Path("ckpt"))
         >>> model = MidiNet(model_config, device=torch.device("cuda"))
         >>> model.load_state_dict(sd)
     """
-    # 加载分词器
-    tokenizer = AutoTokenizer.from_pretrained(path / "tokenizer")
+    # 加载音素编码器
+    phoneme_encoder = TagLabelEncoder(orjson.loads((path / "phoneme.json").read_bytes()))
 
     # 加载模型权重
     model_state = torch.load(path / "model.pth", weights_only=True, map_location=torch.device("cpu"))
@@ -138,10 +143,10 @@ def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any
 
     # 加载标签编码器
     tag_label_encoder = TagLabelEncoder(orjson.loads((path / "tags.json").read_bytes()))
-    return tokenizer, model_state, extra_config, model_config, tag_label_encoder
+    return phoneme_encoder, model_state, extra_config, model_config, tag_label_encoder
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[str, Any], TkTTSExtraConfig, FastSpeech2Config, TagLabelEncoder, Mapping[str, Any], int]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], TkTTSExtraConfig, FastSpeech2Config, TagLabelEncoder, Mapping[str, Any], int]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 
@@ -149,18 +154,18 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
         path: 加载检查点的目录路径
 
     Returns:
-        分词器、模型的状态、模型额外的配置、用于创建模型的配置、标签编码器、优化器的状态、训练了多少个 Epoch
+        模型的状态、模型额外的配置、用于创建模型的配置、标签编码器、优化器的状态、训练了多少个 Epoch
 
     Examples:
-        >>> tokenizer, msd, extra_config, model_config, tag_label_encoder, osd, completed_epochs = load_checkpoint_train(pathlib.Path("ckpt"))
+        >>> msd, extra_config, model_config, tag_label_encoder, osd, completed_epochs = load_checkpoint_train(pathlib.Path("ckpt"))
         >>> model = MidiNet(model_config, deivce=torch.device("cuda"))
         >>> model.load_state_dict(msd)
         >>> optimizer = optim.AdamW(model.parameters())
         >>> optimizer.load_state_dict(osd)
         >>> # 继续训练
     """
-    # 加载分词器和模型状态
-    tokenizer, model_state, extra_config, model_config, tag_label_encoder = load_checkpoint(path)
+    # 加载音素编码器和模型状态
+    _, model_state, extra_config, model_config, tag_label_encoder = load_checkpoint(path)
 
     # 检查并加载优化器权重
     optimizer_state = torch.load(path / "optimizer.pth", weights_only=True, map_location=torch.device("cpu"))
@@ -169,7 +174,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, Mapping[st
     completed_epochs = orjson.loads((path / "progress.json").read_bytes())["completed_epochs"]
 
     # 返回训练所需信息
-    return tokenizer, model_state, extra_config, model_config, tag_label_encoder, optimizer_state, completed_epochs
+    return model_state, extra_config, model_config, tag_label_encoder, optimizer_state, completed_epochs
 
 
 def extract_config(model_state: dict[str, Any], num_heads: int) -> FastSpeech2Config:

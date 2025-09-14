@@ -19,7 +19,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     Returns:
         包含解析后的参数的命名空间对象。
     """
-    parser = argparse.ArgumentParser(description="输出检查点支持的所有标签")
+    parser = argparse.ArgumentParser(description="输出检查点支持的所有音素")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点加载路径")
     parser.add_argument("-o", "--output-file", type=str, default="-", help="输出路径。如果指定为`-`，则输出路径为标准输出。默认为输出到标准输出。")
     return parser.parse_args(args)
@@ -35,10 +35,10 @@ def main(args: argparse.Namespace):
         output_func = lambda x: output_file.write_text(x, encoding="utf-8")
 
     # 加载检查点
-    _, _, _, _, tag_label_encoder = load_checkpoint(args.ckpt_path)
+    phoneme_encoder, _, _, _, _ = load_checkpoint(args.ckpt_path)
 
     # 获取所有标签并排序
-    tags = sorted(tag_label_encoder.vocab.keys())
+    tags = sorted(phoneme_encoder.vocab.keys())
 
     # 打印标签列表
     output_func("\n".join(tags))

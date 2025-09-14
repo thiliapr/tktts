@@ -6,7 +6,7 @@
 import argparse
 import pathlib
 from typing import Optional
-from utils.checkpoint import load_checkpoint
+import orjson
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
@@ -19,8 +19,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     Returns:
         包含解析后的参数的命名空间对象。
     """
-    parser = argparse.ArgumentParser(description="输出检查点支持的所有标签")
-    parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点加载路径")
+    parser = argparse.ArgumentParser(description="获取数据集出现的音素")
+    parser.add_argument("datasets", nargs="+", type=pathlib.Path, help="数据集元数据文件路径列表")
     parser.add_argument("-o", "--output-file", type=str, default="-", help="输出路径。如果指定为`-`，则输出路径为标准输出。默认为输出到标准输出。")
     return parser.parse_args(args)
 
@@ -32,16 +32,22 @@ def main(args: argparse.Namespace):
     else:
         output_file = pathlib.Path(args.output_file)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_func = lambda x: output_file.write_text(x, encoding="utf-8")
+        output_func = lambda x: output_file.write_text(x + "\n", encoding="utf-8")
 
-    # 加载检查点
-    _, _, _, _, tag_label_encoder = load_checkpoint(args.ckpt_path)
+    # 遍历数据集文件元数据，获取其中音素
+    phones = {
+        phone
+        for metadata_file in args.datasets
+        for audio_metadata in orjson.loads(metadata_file.read_bytes()).values()
+        for _, _, phone in audio_metadata.get("phones", [])
+        if phone
+    }
 
-    # 获取所有标签并排序
-    tags = sorted(tag_label_encoder.vocab.keys())
+    # 按音素名称排序
+    phones = sorted(phones)
 
-    # 打印标签列表
-    output_func("\n".join(tags))
+    # 打印音素
+    output_func("\n".join(phones))
 
 
 if __name__ == "__main__":

@@ -49,21 +49,22 @@ class TkTTSDataset(Dataset):
         # 获取所有音频特征
         self.data_samples = np.load(dataset_file)
 
-    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return (
             self.data_samples[f"{index}:text"],
             self.data_samples[f"{index}:positive_prompt"],
             self.data_samples[f"{index}:negative_prompt"],
+            self.data_samples[f"{index}:duration"],
             self.data_samples[f"{index}:mel"],
             self.data_samples[f"{index}:pitch"],
             self.data_samples[f"{index}:energy"]
         )
 
     def __len__(self) -> int:
-        # 每个音频有 6 个特征: 文本序列、正面提示、负面提示、梅尔频谱、音高序列、能量序列
+        # 每个音频有 7 个特征: 文本序列、正面提示、负面提示、时长比例、梅尔频谱、音高序列、能量序列
         # 然后这个文件还储存了每个文本序列和音频序列的长度，也就是 2 个特征
-        # 所以用音频特征总数减去 2 再除以 6 就是音频样本数
-        return (len(self.data_samples) - 2) // 6
+        # 所以用音频特征总数减去 2 再除以 7 就是音频样本数
+        return (len(self.data_samples) - 2) // 7
 
 
 class TkTTSDatasetSampler(Sampler[list[int]]):
@@ -118,7 +119,7 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
 
         # 初始化批次列表
         self.batches = []
-        current_batch: list[int] = []
+        current_batch = []
 
         # 遍历每一个样本
         for idx, seq_len in sorted_pairs:
@@ -149,7 +150,7 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         return len(self.batches)
 
 
-def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> tuple[
+def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> tuple[
     torch.LongTensor,
     torch.LongTensor,
     torch.LongTensor,
@@ -157,13 +158,14 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
     torch.BoolTensor,
     torch.BoolTensor,
     torch.LongTensor,
+    torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
 ]:
     """
     处理变长序列数据的批次整理函数
-    将输入的多个变长序列样本整理为批次张量，包括文本序列、提示词、梅尔频谱图、音高和能量等特征，并生成相应的填充掩码和序列长度信息
+    将输入的多个变长序列样本整理为批次张量，包括文本序列、提示词、时长比例、梅尔频谱图、音高和能量等特征，并生成相应的填充掩码和序列长度信息
 
     工作流程：
     1. 解压批次数据并将每个特征转换为 PyTorch 张量
@@ -173,11 +175,11 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
     5. 返回整理后的批次数据
 
     Args:
-        batch: 包含多个样本的列表，每个样本是包含文本序列、正向提示词、负向提示词、梅尔频谱图、音高和能量特征的元组
+        batch: 包含多个样本的列表，每个样本是包含文本序列、正向提示词、负向提示词、时长比例、梅尔频谱图、音高和能量特征的元组
 
     Returns:
         包含整理后批次数据的元组，包括填充后的文本序列、正向提示词、负向提示词、
-        文本填充掩码、正向提示词掩码、负向提示词掩码、音频长度、填充后的音高序列、
+        文本填充掩码、正向提示词掩码、负向提示词掩码、音频长度、时长比例、填充后的音高序列、
         填充后的能量序列和填充后的音频序列
 
     Examples:
@@ -185,10 +187,10 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
         >>> dataset = YourDataset()
         >>> dataloader = DataLoader(dataset, batch_size=32, collate_fn=sequence_collate_fn)
         >>> for batch in dataloader:
-        >>>     text, pos_prompt, neg_prompt, text_mask, pos_mask, neg_mask, audio_len, pitch, energy, audio = batch
+        >>>     text, pos_prompt, neg_prompt, text_mask, pos_mask, neg_mask, audio_len, duration, pitch, energy, audio = batch
     """
     # 解压批次数据并将每个特征列表转换为张量列表
-    text_sequences, positive_prompt, negative_prompt, mel_spectrogram, pitch, energy = [convert_to_tensor(item) for item in zip(*batch)]
+    text_sequences, positive_prompt, negative_prompt, duration, mel_spectrogram, pitch, energy = [convert_to_tensor(item) for item in zip(*batch)]
 
     # 创建填充掩码用于标识有效数据位置
     text_padding_mask = create_padding_mask(text_sequences)
@@ -199,7 +201,7 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
     audio_length = get_sequence_lengths(mel_spectrogram)
 
     # 对变长序列进行填充对齐，使批次内所有样本长度一致
-    padded_text, padded_positive_prompt, padded_negative_prompt, padded_audio, padded_pitch, padded_energy = [torch.nn.utils.rnn.pad_sequence(item, batch_first=True) for item in [text_sequences, positive_prompt, negative_prompt, mel_spectrogram, pitch, energy]]
+    padded_text, padded_positive_prompt, padded_negative_prompt, padded_audio, padded_duration, padded_pitch, padded_energy = [torch.nn.utils.rnn.pad_sequence(item, batch_first=True) for item in [text_sequences, positive_prompt, negative_prompt, mel_spectrogram, duration, pitch, energy]]
 
     # 返回批次数据
     return (
@@ -210,6 +212,7 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
         positive_prompt_mask,
         negative_prompt_mask,
         audio_length,
+        padded_duration,
         padded_pitch,
         padded_energy,
         padded_audio
@@ -219,13 +222,16 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
 def fastspeech2_loss(
     postnet_pred: torch.Tensor,
     audio_pred: torch.Tensor,
+    duration_pred: torch.Tensor,
     pitch_pred: torch.Tensor,
     energy_pred: torch.Tensor,
     audio_target: torch.Tensor,
+    duration_target: torch.Tensor,
     pitch_target: torch.Tensor,
     energy_target: torch.Tensor,
+    text_padding_mask: torch.BoolTensor,
     audio_padding_mask: torch.BoolTensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     计算 FastSpeech2 模型的复合损失函数，包含音频重建、时长、音高和能量损失。
 
@@ -233,20 +239,28 @@ def fastspeech2_loss(
     时长损失使用总时长比较，其他损失使用逐帧掩码计算，最后返回加权和。
 
     Args:
-        postnet_pred: 经过后处理网络的梅尔频谱预测，形状为 [batch_size, seq_len, num_mels]
-        audio_pred: 预测的原始梅尔频谱图，形状为 [batch_size, seq_len, num_mels]
-        pitch_pred: 预测的音高特征，形状为 [batch_size, seq_len]
-        energy_pred: 预测的能量特征，形状为 [batch_size, seq_len]
-        audio_target: 真实的梅尔频谱图，形状为 [batch_size, seq_len, num_mels]
-        pitch_target: 真实的音高特征，形状为 [batch_size, seq_len]
-        energy_target: 真实的能量特征，形状为 [batch_size, seq_len]
-        audio_padding_mask: 音频预测填充掩码，形状为 [batch_size, seq_len]
+        postnet_pred: 经过后处理网络的梅尔频谱预测，形状为 [batch_size, audio_len, num_mels]
+        audio_pred: 预测的原始梅尔频谱图，形状为 [batch_size, audio_len, num_mels]
+        duration_pred: 预测的时长特征，形状为 [batch_size, text_len]
+        pitch_pred: 预测的音高特征，形状为 [batch_size, audio_len]
+        energy_pred: 预测的能量特征，形状为 [batch_size, audio_len]
+        audio_target: 真实的梅尔频谱图，形状为 [batch_size, audio_len, num_mels]
+        duration_target: 真实的时长特征，形状为 [batch_size, text_len]
+        pitch_target: 真实的音高特征，形状为 [batch_size, audio_len]
+        energy_target: 真实的能量特征，形状为 [batch_size, audio_len]
+        audio_padding_mask: 音频预测填充掩码，形状为 [batch_size, audio_len]
 
     Returns:
-        每个序列的各分量（后处理网络、原始梅尔频谱、音高、能量）损失值，标量张量
+        每个序列的各分量（后处理网络、原始梅尔频谱、时长、音高、能量）损失值，标量张量
     """
     def masked_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor]):
         "计算掩码区域的损失，仅对有效帧求平均"
+        # 截断长度
+        min_seq_len = min(pred.size(1), target.size(1))
+        pred = pred[:, :min_seq_len]
+        target = target[:, :min_seq_len]
+        padding_mask = padding_mask[:, :min_seq_len]
+
         # 计算逐元素L1损失 [batch_size, seq_len, ...]
         elementwise_loss = criterion(pred, target, reduction="none")
 
@@ -266,11 +280,12 @@ def fastspeech2_loss(
     # 计算各分量损失
     postnet_loss = masked_loss(postnet_pred, audio_target, audio_padding_mask, F.l1_loss)
     audio_loss = masked_loss(audio_pred, audio_target, audio_padding_mask, F.l1_loss)
+    duration_loss = masked_loss(duration_pred, duration_target, text_padding_mask, F.mse_loss)
     pitch_loss = masked_loss(pitch_pred, pitch_target, audio_padding_mask, F.mse_loss)
     energy_loss = masked_loss(energy_pred, energy_target, audio_padding_mask, F.mse_loss)
 
     # 返回各分量损失
-    return postnet_loss, audio_loss, pitch_loss, energy_loss
+    return postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss
 
 
 def train(
@@ -282,17 +297,9 @@ def train(
     writer: SummaryWriter,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
-
-    函数执行流程：
-    1. 设置模型为训练模式，初始化梯度缩放器和训练监控工具
-    2. 遍历数据加载器中的每个批次
-    3. 生成文本和组合谱图的 padding mask
-    4. 在混合精度环境下计算模型输出和损失
-    5. 执行梯度反向传播和参数更新（根据累积步数）
-    6. 记录并返回训练过程中的损失值
 
     Args:
         model: 待训练的 TkTTS 模型实例
@@ -305,7 +312,7 @@ def train(
         device: 训练设备（默认使用 CPU）
 
     Returns:
-        最后一步的梅尔频谱、音高、能量预测和目标
+        最后一步的梅尔频谱、时长比例、音高、能量预测和目标
 
     Examples:
         >>> losses = train(model, loader, opt)
@@ -321,7 +328,7 @@ def train(
     progress_bar = tqdm(total=num_steps, desc="Train")
 
     # 当前累积步骤的总损失
-    acc_postnet_loss = acc_audio_loss = acc_pitch_loss = acc_energy_loss = 0
+    acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
 
     # 提前清空梯度
     optimizer.zero_grad()
@@ -329,14 +336,14 @@ def train(
     # 遍历整个训练集
     for step, batch in zip(range(num_steps), dataloader):
         # 数据移至目标设备
-        text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
+        text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, duration_target, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            postnet_pred, audio_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, audio_length, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, pitch_pred, energy_pred, audio_target, pitch_target, energy_target, audio_padding_mask)  # 计算损失
-            postnet_loss, audio_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
-            value = postnet_loss + audio_loss + pitch_loss + energy_loss
+            postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, audio_length, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, duration_target, pitch_target, energy_target)  # 模型前向传播（使用教师强制）
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, duration_target, pitch_target, energy_target, text_padding_mask, audio_padding_mask)  # 计算损失
+            postnet_loss, audio_loss, duration_loss, pitch_loss, energy_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
+            value = postnet_loss + audio_loss + duration_loss + pitch_loss + energy_loss
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()
@@ -344,6 +351,7 @@ def train(
         # 更新累积损失
         acc_postnet_loss += postnet_loss.item() / accumulation_steps
         acc_audio_loss += audio_loss.item() / accumulation_steps
+        acc_duration_loss += duration_loss.item() / accumulation_steps
         acc_pitch_loss += pitch_loss.item() / accumulation_steps
         acc_energy_loss += energy_loss.item() / accumulation_steps
 
@@ -358,6 +366,7 @@ def train(
             for loss_name, loss_value in [
                 ("Post-Net", acc_postnet_loss),
                 ("Mel", acc_audio_loss),
+                ("Duration", acc_duration_loss),
                 ("Pitch", acc_pitch_loss),
                 ("Energy", acc_energy_loss),
             ]:
@@ -376,7 +385,7 @@ def train(
                 writer.add_scalar(name, value, global_step)
 
             # 重置累积损失
-            acc_postnet_loss = acc_audio_loss = acc_pitch_loss = acc_energy_loss = 0
+            acc_postnet_loss = acc_audio_loss = acc_duration_loss = acc_pitch_loss = acc_energy_loss = 0
 
         # 更新进度条
         progress_bar.update()
@@ -386,7 +395,7 @@ def train(
             sample_length = audio_length[0].item()
             results = [
                 x[0, :sample_length].detach().cpu().numpy()
-                for x in [postnet_pred, audio_target, pitch_pred, pitch_target, energy_pred, energy_target]
+                for x in [postnet_pred, audio_target, duration_pred, duration_target, pitch_pred, pitch_target, energy_pred, energy_target]
             ]
             return results[::2], results[1::2]
 
@@ -396,7 +405,7 @@ def validate(
     model: FastSpeech2,
     dataloader: DataLoader,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[float, float, float, float]]]:
+) -> list[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
     计算模型在验证集上的各项损失值，包括音频重建损失、音高损失和能量损失
@@ -411,7 +420,7 @@ def validate(
 
     Returns:
         包含每个样本详细损失信息的列表，每个元素为元组：
-        (预测, 目标, (后处理音频损失, 原始音频损失, 音高损失, 能量损失))
+        (预测, 目标, (后处理音频损失, 原始音频损失, 时长比例损失, 音高损失, 能量损失))
 
     Examples:
         >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
@@ -426,22 +435,22 @@ def validate(
     # 遍历验证集所有批次数据，显示进度条
     for batch in tqdm(dataloader, total=len(dataloader), desc="Validate"):
         # 数据移至目标设备
-        text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
+        text_sequences, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask, audio_length, duration_target, pitch_target, energy_target, audio_target = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            postnet_pred, audio_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, audio_length, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
+            postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_padding_mask = model(text_sequences, audio_length, positive_prompt, negative_prompt, text_padding_mask, positive_prompt_mask, negative_prompt_mask)
 
             # 计算损失
-            all_loss = fastspeech2_loss(postnet_pred, audio_pred, pitch_pred, energy_pred, audio_target, pitch_target, energy_target, audio_padding_mask)
+            all_loss = fastspeech2_loss(postnet_pred, audio_pred, duration_pred, pitch_pred, energy_pred, audio_target, duration_target, pitch_target, energy_target, text_padding_mask, audio_padding_mask)
 
         # 记录当前批次的损失信息和预测-目标值
         for seq_idx in range(text_sequences.size(0)):
             sample_length = audio_length[seq_idx].item()
             results = [
                 x[seq_idx, :sample_length].cpu().numpy()
-                for x in [postnet_pred, audio_target, pitch_pred, pitch_target, energy_pred, energy_target]
+                for x in [postnet_pred, audio_target, duration_pred, duration_target, pitch_pred, pitch_target, energy_pred, energy_target]
             ]
             loss_results.append((
                 results[::2],
@@ -485,7 +494,7 @@ def main(args: argparse.Namespace):
 
     # 读取检查点
     print("读取检查点 ...")
-    tokenizer, model_state_dict, extra_config, model_config, tag_label_encoder, optimiezer_state_dict, completed_epochs = load_checkpoint_train(args.ckpt_path)
+    model_state_dict, extra_config, model_config, tag_label_encoder, optimiezer_state_dict, completed_epochs = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
     model = FastSpeech2(model_config, args.encoder_dropout, args.decoder_dropout, args.variance_predictor_dropout, args.postnet_dropout)
@@ -544,7 +553,7 @@ def main(args: argparse.Namespace):
             figure, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
 
             # 绘制对比图
-            for mel_axis, figure_title, mel, pitch, energy in [
+            for mel_axis, figure_title, mel, duration, pitch, energy in [
                 (ax1, "Predicted Mel Spectrogram", *pred),
                 (ax2, "True Mel Spectrogram", *target)
             ]:
@@ -565,6 +574,11 @@ def main(args: argparse.Namespace):
                 normalized_axis.plot(times, pitch, label="Pitch", color="blue")
                 normalized_axis.plot(times, energy, label="Energy", color="red")
 
+                # 绘制时长比例
+                phoneme_positions = np.cumsum(duration)
+                for position in phoneme_positions:
+                    mel_axis.axvline(min(position, 1) * times[-1])
+
                 # 设置标题并创造图例
                 mel_axis.set_title(figure_title)
                 normalized_axis.legend()
@@ -573,13 +587,12 @@ def main(args: argparse.Namespace):
             writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
 
         # 绘制验证损失分布直方图，记录验证损失
-        for loss_idx, loss_name in enumerate(["Post-Net", "Mel", "Pitch", "Energy"]):
+        for loss_idx, loss_name in enumerate(["Post-Net", "Mel", "Duration", "Pitch", "Energy"]):
             loss_values = [all_loss[loss_idx] for _, _, all_loss in val_results]
             writer.add_histogram(f"Epoch {current_epoch + 1}/Validate/{loss_name} Loss Distribution", np.array(loss_values))
             writer.add_scalars(f"Loss/{loss_name}", {"Valid": np.array(loss_values).mean()}, len(train_loader) // args.accumulation_steps * (current_epoch + 1))
 
     # 记录模型的文本和标签嵌入，覆盖上一个记录
-    writer.add_embedding(model.embedding.weight, [token.replace("\n", "[NEWLINE]").replace(" ", "[SPACE]") for token in tokenizer.convert_ids_to_tokens(range(len(tokenizer)))], tag=f"Text Embedding")
     writer.add_embedding(model.tag_embedding.weight, [tag_label_encoder.id_to_tag[token_id] for token_id in range(len(tag_label_encoder))], tag=f"Tag Embedding")
 
     # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源

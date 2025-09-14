@@ -1,12 +1,12 @@
 torch
 orjson
 tqdm
-transformers
 tokenizers
-librosa
-pyworld
-soundfile
+librosa  # prepare_fast_dataset.py
+pyworld  # prepare_fast_dataset.py
+soundfile  # generate.py
 numpy
-matplotlib
-tensorboard
+matplotlib  # train_tktts.py
+tensorboard  # train_tktts.py
+tgt  # prepare_fast_dataset.py
 luaparser  # extract_artemis.py

@@ -125,15 +125,80 @@ python split_dataset.py /path/to/dataset/metadata.json test.json:1 nul:99
 ```
 这样，你的`/path/to/dataset`目录应出现总数据1%的`test.json`。这主要用于与小规模数据集测试。
 
-### 训练分词器
+### 文本-语音对齐
+#### 使用 Montreal Forced Aligner 进行强制对齐
+由于 FastSpeech 系列需要显式文本-语音对齐，第一代往往从训练好的自回归模型（称为“教师模型”）提取编码器-解码器的注意力矩阵，用来对齐文本和音频。  
+第二代 FastSpeech 改进了这一点，改为使用[Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io/en/latest/index.html)提取时长信息。  
+这里介绍如何使用`Montreal Forced Aligner`提取时长信息。
 ```bash
-python train_tokenizer.py /path/to/ckpt -t /path/to/dataset/train.json -v /path/to/dataset/val.json
+# 参考 https://montreal-forced-aligner.readthedocs.io/en/latest/getting_started.html
+# 下载 Anaconda，安装，然后创建 Montreal Forced Aligner 的虚拟环境
+conda config --add channels conda-forge
+conda create -n aligner montreal-forced-aligner
+conda activate aligner
+
+# 测试是否成功创建并使用了虚拟环境
+mfa --help
+
+# 以日语为例，下载日语的分词器、词典、声学模型
+# 模型一览: https://mfa-models.readthedocs.io/en/latest/index.html
+mfa model download tokenizer japanese_mfa
+mfa model download dictionary japanese_mfa
+mfa model download acoustic japanese_mfa
+
+# 对文本进行分词
+python prepare_tokenize.py /path/to/dataset/metadata.json
+mfa tokenize /path/to/dataset japanese_mfa /path/to/dataset --clean
+
+# 对齐文本，生成 TextGrid
+mfa align /path/to/dataset japanese_mfa japanese_mfa /path/to/dataset --clean
+
+# 提取时长信息，将其注入原本的元数据文件，并清理临时文件
+python post_align.py /path/to/dataset/metadata.json /path/to/dataset/metadata.json
 ```
+
+#### 其他对齐方式
+如果你想使用对齐方式，如果恰好输出格式为`TextGrid`，你可以尝试用`post_align.py`提取。  
+如果不是，你需要写一个脚本手动将对齐结果转换格式，格式示例
+```json
+{
+    "hololive/kiryu_coco/ytb-live-2023-09-25.ogg": {
+        "phones": [
+            [0, 1, "19"],
+            [9, 18, "89"],
+            [18, 89, "0"],
+            [89, 106, "6"],
+            [106, 1024, "0"],
+            [1024, 8964, "4"]
+        ],
+        "positive_prompt": ["source:hololive", "source:youtube", "character:桐生ココ", "year:2023"],
+        "negative_prompt": []
+    }
+}
+```
+```python
+from typing import TypedDict, NamedTuple
+
+class PhoneInfo(NamedTuple):
+    start_time: float
+    end_time: float
+    phone: float
+
+class AudioMetadata(TypedDict):
+    phones: PhoneInfo
+    positive_prompt: list[str]
+    negative_prompt: list[str]
+```
+其中元数据不需要`text`键（但是为了分享，建议保留作为参考）
+
+### 可选: 发布数据集
+对齐前或者对齐后，你都可以把整个`/path/to/dataset`打包发布为数据集。
 
 ### 初始化检查点
 ```bash
+python list_phones_from_datasets.py /path/to/dataset/train.json -o /path/to/phones.txt
 python list_tags_from_datasets.py /path/to/dataset/train.json -o /path/to/tags.txt
-python init_checkpoint.py /path/to/ckpt -t /path/to/tags.txt
+python init_checkpoint.py /path/to/ckpt /path/to/phones.txt -t /path/to/tags.txt
 ```
 
 ### 将通用数据集转化为快速训练数据集
