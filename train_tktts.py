@@ -297,7 +297,7 @@ def train(
     writer: SummaryWriter,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
     """
     训练 TkTTS-FastSpeech2 模型的函数，支持梯度累积和混合精度训练
 
@@ -401,7 +401,7 @@ def validate(
     model: FastSpeech2,
     dataloader: DataLoader,
     device: torch.device = torch.device("cpu")
-) -> list[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[float, float, float, float]]]:
+) -> list[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[float, float, float, float, float]]]:
     """
     在验证集上评估 FastSpeech2 模型的性能
     计算模型在验证集上的各项损失值，包括音频重建损失、音高损失和能量损失
