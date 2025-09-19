@@ -313,10 +313,6 @@ def train(
 
     Returns:
         最后一步的梅尔频谱、时长比例、音高、能量预测和目标
-
-    Examples:
-        >>> losses = train(model, loader, opt)
-        >>> plt.plot(losses)  # 绘制损失曲线
     """
     # 设置模型为训练模式
     model.train()
