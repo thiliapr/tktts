@@ -82,7 +82,7 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         batches: 当前分配到的批次列表
 
     Examples:
-        >>> dataset = TkTTSDataset([pathlib.Path("data/")], tokenizer)
+        >>> dataset = TkTTSDataset([pathlib.Path("dataset.npz")])
         >>> sampler = TkTTSDatasetSampler(dataset, max_batch_tokens=4096)
         >>> for batch in sampler:
         ...     print(batch)  # [19, 89, 64]
