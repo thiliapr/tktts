@@ -549,12 +549,12 @@ def main(args: argparse.Namespace):
             figure, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
 
             # 绘制对比图
-            for mel_axis, figure_title, mel, duration, pitch, energy in [
+            for mel_axes, figure_title, mel, duration, pitch, energy in [
                 (ax1, "Predicted Mel Spectrogram", *pred),
                 (ax2, "True Mel Spectrogram", *target)
             ]:
                 # 倒置为 [num_mels, num_frames] 维度，展示梅尔频谱
-                librosa.display.specshow(mel.T, y_axis="mel", x_axis="time", sr=extra_config["sample_rate"], fmax=8000, ax=mel_axis)
+                librosa.display.specshow(mel.T, y_axis="mel", x_axis="time", sr=extra_config["sample_rate"], fmax=8000, ax=mel_axes)
 
                 # 将清音部分绘制为空白
                 pitch[pitch < VOICED_THRESHOLD] = np.nan
@@ -565,19 +565,19 @@ def main(args: argparse.Namespace):
 
                 # 绘制音高和能量
                 times = librosa.times_like(pitch, sr=extra_config["sample_rate"])
-                normalized_axis = mel_axis.twinx()
-                normalized_axis.set_ylim(0, 1)
-                normalized_axis.plot(times, pitch, label="Pitch", color="blue")
-                normalized_axis.plot(times, energy, label="Energy", color="red")
+                normalized_axes = mel_axes.twinx()
+                normalized_axes.set_ylim(0, 1)
+                normalized_axes.plot(times, pitch, label="Pitch", color="blue")
+                normalized_axes.plot(times, energy, label="Energy", color="red")
 
                 # 绘制时长比例
                 phoneme_positions = np.cumsum(duration)
                 for position in phoneme_positions:
-                    mel_axis.axvline(min(position, 1) * times[-1])
+                    mel_axes.axvline(min(position, 1) * times[-1])
 
                 # 设置标题并创造图例
-                mel_axis.set_title(figure_title)
-                normalized_axis.legend()
+                mel_axes.set_title(figure_title)
+                normalized_axes.legend()
 
             # 添加图像到 writer
             writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
