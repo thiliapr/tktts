@@ -45,7 +45,7 @@ class TkTTSDataset(Dataset):
         - 音频的能量序列
     """
 
-    def __init__(self, dataset_file: pathlib.Path):
+    def __init__(self, dataset_file: os.PathLike):
         # 获取所有音频特征
         self.data_samples = np.load(dataset_file)
 
@@ -82,7 +82,7 @@ class TkTTSDatasetSampler(Sampler[list[int]]):
         batches: 当前分配到的批次列表
 
     Examples:
-        >>> dataset = TkTTSDataset([pathlib.Path("dataset.npz")])
+        >>> dataset = TkTTSDataset("dataset.npz")
         >>> sampler = TkTTSDatasetSampler(dataset, max_batch_tokens=4096)
         >>> for batch in sampler:
         ...     print(batch)  # [19, 89, 64]
