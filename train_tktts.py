@@ -22,7 +22,7 @@ from matplotlib import pyplot as plt
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
 from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_POSTNET_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY, VOICED_THRESHOLD
 from utils.model import FastSpeech2
-from utils.tookit import convert_to_tensor, create_padding_mask, get_sequence_lengths
+from utils.toolkit import convert_to_tensor, create_padding_mask, get_sequence_lengths
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
