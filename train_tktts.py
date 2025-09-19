@@ -479,7 +479,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-de", "--encoder-dropout", default=DEFAULT_ENCODER_DROPOUT, type=float, help="编码器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-dd", "--decoder-dropout", default=DEFAULT_DECODER_DROPOUT, type=float, help="解码器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-dv", "--variance-predictor-dropout", default=DEFAULT_VARIANCE_PREDICTOR_DROPOUT, type=float, help="变异性预测器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
-    parser.add_argument("-dp", "--postnet-dropout", default=DEFAULT_POSTNET_DROPOUT, type=float, help="变异性预测器 Dropout 概率，用于防止过拟合，默认为 %(default)s")
+    parser.add_argument("-dp", "--postnet-dropout", default=DEFAULT_POSTNET_DROPOUT, type=float, help="后处理网络 Dropout 概率，用于防止过拟合，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
     return parser.parse_args(args)
 
