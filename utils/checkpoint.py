@@ -187,7 +187,7 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> FastSpeech2Co
         dim_model: 注意力头数量。如果模型维度不能被注意力头数整除，则会抛出 AssertError
 
     Returns:
-        包含所有提取出的配置参数的 FreeSpeech2Config 对象
+        包含所有提取出的配置参数的 FastSpeech2Config 对象
 
     Examples:
         >>> state_dict = torch.load("model.pth")
